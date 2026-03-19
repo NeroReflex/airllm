@@ -470,6 +470,9 @@ class AirLLMBaseModel(GenerationMixin):
         return seq.shape[1]
 
     def get_pos_emb_args(self, len_p, len_s):
+        if getattr(self, '_cached_position_embeddings', None) is not None:
+            cos, sin = self._cached_position_embeddings
+            return {'position_embeddings': (cos[:, len_p:len_p + len_s], sin[:, len_p:len_p + len_s])}
         return {}
 
     def get_past_key_value_args(self, k_cache, v_cache):
@@ -543,7 +546,7 @@ class AirLLMBaseModel(GenerationMixin):
         all_hidden_states = [] * len(self.layers) if output_hidden_states else None
         all_self_attns = [] * len(self.layers) if output_attentions else None
 
-        with torch.inference_mode(), ThreadPoolExecutor() as executor:
+        with torch.no_grad(), ThreadPoolExecutor() as executor:
 
             # Calculate layers per batch for multi-layer GPU loading (cached after first call)
             if not hasattr(self, '_cached_layers_per_batch'):
