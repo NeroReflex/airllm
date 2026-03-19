@@ -23,6 +23,9 @@ except ImportError:
 
 from .utils import clean_memory, load_layer, \
     find_or_create_local_splitted_path
+from .device_utils import (is_cuda_device, is_directml_available,
+                            can_pin_memory, supports_bitsandbytes,
+                            get_device_type)
 
 try:
     import bitsandbytes as bnb
@@ -92,7 +95,7 @@ class AirLLMBaseModel(GenerationMixin):
 
 
         self.profiling_mode = profiling_mode
-        self.profiler = LayeredProfiler()
+        self.profiler = LayeredProfiler(device=device)
 
         self.total_disk_loading_time = None
         self.total_gpu_loading_time = None
@@ -103,6 +106,12 @@ class AirLLMBaseModel(GenerationMixin):
         if compression is not None:
             if not bitsandbytes_installed:
                 raise ImportError('WARNING: bitsandbytes not found. Compression needs bitsandbytes. To use compression, please install bitsandbytes: `pip install bitsandbytes`')
+            if not supports_bitsandbytes(device):
+                raise ValueError(
+                    f"Compression ('4bit'/'8bit') requires a CUDA (NVIDIA) device but got device='{device}'. "
+                    f"Integrated GPU / DirectML / MPS devices do not support bitsandbytes. "
+                    f"Run without compression=... on this device."
+                )
 
 
         self.compression = compression
@@ -161,8 +170,10 @@ class AirLLMBaseModel(GenerationMixin):
             self.prefetching = False
             print(f"not support prefetching for compression for now. loading with no prepetching mode.")
 
-        # this operation should run only if gpu is available
-        if prefetching and device.startswith("cuda"):
+        # CUDA streams are only available on NVIDIA GPUs.
+        # For DirectML / MPS / CPU we still prefetch using ThreadPoolExecutor
+        # but without a CUDA stream (stream = None).
+        if prefetching and is_cuda_device(device):
             self.stream = torch.cuda.Stream()
         else:
             self.stream = None
@@ -220,7 +231,7 @@ class AirLLMBaseModel(GenerationMixin):
 
                 except (TypeError, Exception) as ve:
                     del self.model
-                    clean_memory()
+                    clean_memory(self.running_device)
                     self.model = None
 
         # fallback to original way
@@ -315,7 +326,7 @@ class AirLLMBaseModel(GenerationMixin):
 
         t = time.time()
 
-        load_layer_output = load_layer(self.checkpoint_path, layer_name, self.profiling_mode)
+        load_layer_output = load_layer(self.checkpoint_path, layer_name, self.profiling_mode, device=self.running_device)
         elapsed_time = time.time() - t
 
         if self.profiling_mode:
@@ -328,15 +339,12 @@ class AirLLMBaseModel(GenerationMixin):
         else:
             state_dict = load_layer_output
 
-        # pin memory:
+        # pin memory (only beneficial when copying to a CUDA device):
         if self.prefetching:
             t = time.time()
-            if torch.cuda.is_available():  # Check if CUDA is available
+            if can_pin_memory(self.running_device):
                 for k in state_dict.keys():
-                    state_dict[k].pin_memory()
-            else:
-                # For CPU, no action is needed, but you could optionally add a log or message
-                print("Prefetching is enabled, but no pin_memory operation is needed for CPU.")
+                    state_dict[k] = state_dict[k].pin_memory()
 
             elapsed_time = time.time() - t
             if self.profiling_mode:
