@@ -29,3 +29,30 @@ class TestAutoModel(unittest.TestCase):
             module, cls = AutoModel.get_module_class(k)
             self.assertEqual(cls, v, f"expecting {v}")
 
+    def test_qwen3_architecture_detection(self):
+        """Validate Qwen3 dense and MoE architectures are dispatched correctly.
+
+        Uses unittest.mock to avoid network access: the real get_module_class
+        calls AutoConfig.from_pretrained, so we inject a fake config object.
+        """
+        from unittest.mock import patch, MagicMock
+
+        cases = [
+            ("Qwen3ForCausalLM",    "AirLLMQwen3"),
+            ("Qwen3MoeForCausalLM", "AirLLMQwen3Moe"),
+            ("Qwen3_5MoeForConditionalGeneration", "AirLLMQwen3Moe"),
+        ]
+
+        for arch, expected_cls in cases:
+            fake_config = MagicMock()
+            fake_config.architectures = [arch]
+            with patch(
+                "airllm.auto_model.AutoConfig.from_pretrained",
+                return_value=fake_config,
+            ):
+                _, cls = AutoModel.get_module_class("fake/model-id")
+            self.assertEqual(
+                cls, expected_cls,
+                f"Architecture '{arch}' should map to {expected_cls}, got {cls}",
+            )
+

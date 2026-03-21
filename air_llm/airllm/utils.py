@@ -144,6 +144,11 @@ def check_space(checkpoint_path, layer_shards_saving_path=None, compression=None
     if layer_shards_saving_path is not None:
         for saved_split_file in glob(str(Path(layer_shards_saving_path) / splitted_model_dir_name / '*')):
             total_saved_split_files_size_bytes += os.path.getsize(saved_split_file)
+    else:
+        # When saving to the checkpoint directory itself, count already-split
+        # files so check_space correctly accounts for reusable space (#muhammad).
+        for saved_split_file in glob(str(Path(checkpoint_path) / splitted_model_dir_name / '*')):
+            total_saved_split_files_size_bytes += os.path.getsize(saved_split_file)
 
     if compression == '4bit':
         total_shard_files_size_bytes = int(total_shard_files_size_bytes / 0.2813)
@@ -280,6 +285,20 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
     n_shards = len(set(index.values()))
     state_dict = {}
 
+    # Build shard-number → actual-filename mapping from the index so we never
+    # reconstruct filenames with hardcoded zero-padding. This fixes models that
+    # use non-standard padding (e.g. DeepSeek uses 6-digit shard numbers like
+    # model-000001-of-000006.safetensors instead of model-00001-of-00006).
+    # See alexey/#214.
+    shard_to_filename: dict = {}
+    for _fname in set(index.values()):
+        _parts = _fname.split('-')
+        if len(_parts) > 1:
+            try:
+                shard_to_filename[int(_parts[1])] = _fname
+            except ValueError:
+                pass
+
 
     if not os.path.exists(saving_path):
         #os.makedirs(saving_path)
@@ -296,20 +315,13 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
             if max(shards) > shard:
                 # optinoally delete original file
                 if delete_original and shard != 0:
-                    if not safetensors_format:
-                        to_delete = checkpoint_path / f'pytorch_model-000{shard:02d}-of-000{n_shards:02d}.bin'
-                    else:
-                        to_delete = checkpoint_path / f'model-000{shard:02d}-of-000{n_shards:02d}.safetensors'
-
+                    to_delete = checkpoint_path / shard_to_filename[shard]
                     print(f"deleting original file: {to_delete}")
                     remove_real_and_linked_file(to_delete)
                 shard += 1
                 print(f'Loading shard {shard}/{n_shards}')
 
-                if not safetensors_format:
-                    to_load = checkpoint_path / f'pytorch_model-000{shard:02d}-of-000{n_shards:02d}.bin'
-                else:
-                    to_load = checkpoint_path / f'model-000{shard:02d}-of-000{n_shards:02d}.safetensors'
+                to_load = checkpoint_path / shard_to_filename[shard]
 
                 # check if to_load exist, if not downloaad it...
                 if not os.path.exists(to_load):
