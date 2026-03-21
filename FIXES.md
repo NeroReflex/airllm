@@ -49,7 +49,7 @@ Fix: grab the model's `rotary_emb` module and compute `position_embeddings` dyna
 
 ### Environment
 - Python 3.11
-- PyTorch 2.10.0+cu126
+- PyTorch 2.10.0+cu128
 - transformers 5.3.0
 - bitsandbytes 0.49.2
 - Windows 11

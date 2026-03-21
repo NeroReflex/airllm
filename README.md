@@ -76,6 +76,7 @@
 
 ## Table of Contents
 
+* [Setup with uv (recommended)](#setup-with-uv-recommended)
 * [Quick start](#quickstart)
 * [Model Compression](#model-compression---3x-inference-speed-up)
 * [Configurations](#configurations)
@@ -86,6 +87,64 @@
 * [Acknowledgement](#acknowledgement)
 * [FAQ](#faq)
 
+## Setup with uv (recommended)
+
+[uv](https://docs.astral.sh/uv/) is a fast Python package and project manager. It creates an isolated virtual environment and resolves all dependencies — including the correct CUDA-enabled PyTorch build — in one step.
+
+### 1. Install uv
+
+```bash
+# Linux / macOS
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows (PowerShell)
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+### 2. Clone and enter the package directory
+
+```bash
+git clone https://github.com/lyogavin/airllm
+cd airllm/air_llm
+```
+
+### 3. Create the environment and install dependencies
+
+```bash
+uv sync
+```
+
+This automatically installs PyTorch with CUDA 12.8 support on Linux/Windows. On macOS it installs the standard CPU+MPS build from PyPI.
+
+> **Note on CUDA 13:** PyTorch wheels for CUDA 13.x have not yet been published. `cu128` (CUDA 12.8) is the latest available. The `pyproject.toml` will be updated as soon as official wheels are released.
+
+To add optional extras:
+
+```bash
+# 4-bit / 8-bit compression (NVIDIA GPU only)
+uv sync --extra compression
+
+# Intel / AMD integrated GPU on Windows
+uv sync --extra directml
+
+# Development dependencies (includes pytest)
+uv sync --extra dev
+```
+
+### 4. Run your code
+
+```bash
+# Run a script
+uv run python your_inference_script.py
+
+# Run the test suite
+uv run pytest tests/
+```
+
+> **Tip:** prefix any command with `uv run` to use the managed environment without activating it manually. Alternatively, activate it with `source .venv/bin/activate` (Linux/macOS) or `.venv\Scripts\activate` (Windows).
+
+---
+
 ## Quickstart
 
 ### 1. Install package
@@ -93,7 +152,7 @@
 First, install PyTorch with CUDA support (required for GPU inference):
 
 ```bash
-pip install torch --index-url https://download.pytorch.org/whl/cu126
+pip install torch --index-url https://download.pytorch.org/whl/cu128
 ```
 
 Then install the airllm pip package:
