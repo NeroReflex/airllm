@@ -380,22 +380,82 @@ class AirLLMBaseModel(GenerationMixin):
         """Load a batch of layers to CPU memory."""
         return [self.load_layer_to_cpu(name) for name in layer_names]
 
+    def _move_mxfp4_params_to_device(self, state_dict):
+        """Handle transformers MXFP4 pre-quantized tensors in-place.
+
+        GPT-OSS checkpoints store expert weights as `*_blocks` + `*_scales`
+        tensors. The transformers MXFP4 integration deserializes those pairs
+        into the in-memory `gate_up_proj` / `down_proj` expert parameters.
+        """
+        try:
+            from transformers.quantizers.quantizer_mxfp4 import Mxfp4HfQuantizer
+            from transformers.integrations.mxfp4 import Mxfp4Deserialize
+        except ImportError:
+            return set(), set()
+
+        if self.hf_quantizer is None or not isinstance(self.hf_quantizer, Mxfp4HfQuantizer):
+            return set(), set()
+
+        handled_keys = set()
+        handled_params = set()
+        deserializer = Mxfp4Deserialize(self.hf_quantizer)
+
+        for suffix in ("gate_up_proj", "down_proj"):
+            block_suffix = f"{suffix}_blocks"
+            scale_suffix = f"{suffix}_scales"
+            for key in list(state_dict.keys()):
+                if not key.endswith(block_suffix):
+                    continue
+                full_layer_name = key[: -len("_blocks")]
+                scale_key = f"{full_layer_name}_scales"
+                if scale_key not in state_dict:
+                    continue
+
+                deserializer.convert(
+                    {
+                        block_suffix: state_dict[key],
+                        scale_suffix: state_dict[scale_key],
+                    },
+                    model=self.model,
+                    full_layer_name=full_layer_name,
+                    missing_keys=set(),
+                )
+                handled_keys.update({key, scale_key})
+                handled_params.add(full_layer_name)
+
+        return handled_keys, handled_params
+
     def move_layer_to_device(self, state_dict):
         # transformers >=5 may compute rotary embeddings dynamically and no longer
         # expose rotary_emb as a module attribute in attention blocks.
         state_dict = {k: v for k, v in state_dict.items() if 'rotary_emb' not in k}
 
-        layers = []
+        handled_state_dict_keys, preloaded_quantized_params = self._move_mxfp4_params_to_device(state_dict)
+        if handled_state_dict_keys:
+            state_dict = {k: v for k, v in state_dict.items() if k not in handled_state_dict_keys}
+
+        layers = list(preloaded_quantized_params)
         for param_name, param in state_dict.items():
             if self.hf_quantizer is None:
-                layers.append(param_name)
+                if param_name not in layers:
+                    layers.append(param_name)
             else:
-                if '.weight' in param_name:
-                    layer_name = param_name[:param_name.index(".weight") + len(".weight")]
+                if param_name in preloaded_quantized_params:
+                    continue
+                if self.hf_quantizer.param_needs_quantization(self.model, param_name):
+                    if '.weight' in param_name:
+                        layer_name = param_name[:param_name.index(".weight") + len(".weight")]
+                    else:
+                        layer_name = param_name
                     if layer_name not in layers:
                         layers.append(layer_name)
+                else:
+                    if param_name not in layers:
+                        layers.append(param_name)
 
         for param_name in layers:
+            if param_name in preloaded_quantized_params:
+                continue
             if (self.hf_quantizer is None or
                 not self.hf_quantizer.param_needs_quantization(self.model, param_name)
                ):
@@ -727,7 +787,30 @@ class AirLLMBaseModel(GenerationMixin):
                     layer = self.layers[i]
                     if self.hf_quantizer is not None:
                         for param_name in all_moved_layers[offset]:
-                            set_module_tensor_to_device(self.model, param_name, 'meta')
+                            try:
+                                set_module_tensor_to_device(self.model, param_name, 'meta')
+                            except ValueError:
+                                # Some quantized integrations (notably MXFP4 GPT-OSS)
+                                # materialize tensors in-place on custom expert
+                                # modules that accelerate cannot evict back to meta.
+                                parts = param_name.split('.')
+                                module = self.model
+                                for part in parts[:-1]:
+                                    module = getattr(module, part)
+                                tensor = getattr(module, parts[-1], None)
+                                if tensor is not None:
+                                    meta_tensor = torch.empty(
+                                        tuple(tensor.shape),
+                                        device=torch.device('meta'),
+                                    )
+                                    setattr(
+                                        module,
+                                        parts[-1],
+                                        torch.nn.Parameter(
+                                            meta_tensor,
+                                            requires_grad=False,
+                                        ),
+                                    )
                     else:
                         layer.to("meta")
                     layer.to("meta")

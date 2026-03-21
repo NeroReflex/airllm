@@ -281,7 +281,7 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
         check_space(checkpoint_path, layer_shards_saving_path, compression, splitted_model_dir_name=splitted_model_dir_name)
 
 
-    shard = 0
+    loaded_shards = set()
     n_shards = len(set(index.values()))
     state_dict = {}
 
@@ -312,18 +312,15 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
         # checking whether after spliting from '-', if second element exists. otherwise it throws errors for single 'model.safetensor' files
         shards = [int(v.split('-')[1]) for k, v in index.items() if k.startswith(layer) and '-' in v and len(v.split('-')) > 1]
         if len(shards) > 0:
-            if max(shards) > shard:
-                # optinoally delete original file
-                if delete_original and shard != 0:
-                    to_delete = checkpoint_path / shard_to_filename[shard]
-                    print(f"deleting original file: {to_delete}")
-                    remove_real_and_linked_file(to_delete)
-                shard += 1
-                print(f'Loading shard {shard}/{n_shards}')
+            for shard_num in sorted(set(shards)):
+                if shard_num in loaded_shards:
+                    continue
 
-                to_load = checkpoint_path / shard_to_filename[shard]
+                print(f'Loading shard {shard_num}/{n_shards - 1 if 0 in shard_to_filename else n_shards}')
 
-                # check if to_load exist, if not downloaad it...
+                to_load = checkpoint_path / shard_to_filename[shard_num]
+
+                # check if to_load exist, if not download it...
                 if not os.path.exists(to_load):
                     assert repo_id is not None
                     huggingface_hub.snapshot_download(repo_id, allow_patterns=os.path.basename(to_load),
@@ -333,6 +330,8 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
                     state_dict.update(torch.load(to_load, map_location='cpu'))
                 else:
                     state_dict.update(load_file(to_load, device='cpu'))
+
+                loaded_shards.add(shard_num)
 
         else:
             shards = [v for k, v in index.items() if k.startswith(layer)]

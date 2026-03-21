@@ -41,6 +41,7 @@ class TestAutoModel(unittest.TestCase):
             ("Qwen3ForCausalLM",    "AirLLMQwen3"),
             ("Qwen3MoeForCausalLM", "AirLLMQwen3Moe"),
             ("Qwen3_5MoeForConditionalGeneration", "AirLLMQwen3Moe"),
+            ("GptOssForCausalLM", "AirLLMGPTOss"),
         ]
 
         for arch, expected_cls in cases:

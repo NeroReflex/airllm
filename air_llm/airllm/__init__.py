@@ -12,6 +12,7 @@ else:
     from .airllm import AirLLMLlama2
     from .airllm_chatglm import AirLLMChatGLM
     from .airllm_glm4 import AirLLMGLM4
+    from .airllm_gpt_oss import AirLLMGPTOss
     from .airllm_qwen import AirLLMQWen
     from .airllm_qwen2 import AirLLMQWen2
     from .airllm_qwen3_moe import AirLLMQwen3Moe, AirLLMQwen3

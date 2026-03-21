@@ -23,6 +23,8 @@ dependencies = [
 [project.optional-dependencies]
 # 4-bit / 8-bit block-wise quantization (NVIDIA GPU only)
 compression = ["bitsandbytes>=0.49"]
+# GPT-OSS / MXFP4 expert kernels
+gpt-oss = ["kernels"]
 # Intel / AMD integrated GPU on Windows
 directml = ["torch-directml"]
 # Apple Silicon (MLX backend)
