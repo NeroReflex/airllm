@@ -1,8 +1,5 @@
 """AirLLM support for GPT-OSS models (for example `unsloth/gpt-oss-20b`)."""
 
-import torch
-from accelerate import init_empty_weights
-from transformers import AutoModelForCausalLM
 from transformers import GenerationConfig
 
 from .airllm_base import AirLLMBaseModel
@@ -29,28 +26,11 @@ class AirLLMGPTOss(AirLLMBaseModel):
     def get_generation_config(self):
         return GenerationConfig()
 
-    def _move_rotary_emb_to_device(self):
-        try:
-            self.model.model.rotary_emb.to(
-                device=self.running_device,
-                dtype=self.running_dtype,
-            )
-        except Exception:
-            pass
-
     def init_model(self):
+        # Reuse base init pipeline; just force eager attention for GPT-OSS.
+        self.config.attn_implementation = "eager"
         try:
-            self.model = None
-            self.config.attn_implementation = "eager"
-            with init_empty_weights():
-                self.model = AutoModelForCausalLM.from_config(
-                    self.config,
-                    attn_implementation="eager",
-                    trust_remote_code=True,
-                )
-            self._init_strategy = "gpt_oss_eager"
-            self._finalize_model_init()
-            self._move_rotary_emb_to_device()
+            super().init_model()
         except ImportError as exc:
             if "kernels" in str(exc) or "MXFP4" in str(exc) or "mxfp4" in str(exc):
                 raise ImportError(
@@ -58,37 +38,6 @@ class AirLLMGPTOss(AirLLMBaseModel):
                     "Install it with `pip install kernels` or `uv sync --extra gpt-oss`."
                 ) from exc
             raise
-
-    def _init_model_fast(self):
-        if getattr(self, "_init_strategy", None) == "gpt_oss_eager":
-            with init_empty_weights():
-                self.model = AutoModelForCausalLM.from_config(
-                    self.config,
-                    attn_implementation="eager",
-                    trust_remote_code=True,
-                )
-            self._finalize_model_init()
-            self._move_rotary_emb_to_device()
-            return
-        super()._init_model_fast()
-
-    def get_pos_emb_args(self, len_p, len_s):
-        position_ids = torch.arange(
-            len_p,
-            len_p + len_s,
-            dtype=torch.long,
-            device=self.running_device,
-        ).unsqueeze(0)
-        hidden_states = torch.zeros(
-            1,
-            len_s,
-            self.config.hidden_size,
-            dtype=self.running_dtype,
-            device=self.running_device,
-        )
-        with torch.no_grad():
-            cos, sin = self.model.model.rotary_emb(hidden_states, position_ids)
-        return {"position_embeddings": (cos, sin)}
 
     def set_layer_names_dict(self):
         """GPT-OSS follows the standard transformers base-model layout."""

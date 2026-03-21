@@ -91,40 +91,38 @@ class TestAirLLMGPTOss(unittest.TestCase):
         self.assertEqual(cls, "AirLLMGPTOss")
 
     def test_init_model_uses_eager_attention(self):
-        """init_model must load with attn_implementation='eager'."""
+        """init_model should force eager attention and reuse base init flow."""
         from unittest.mock import patch, MagicMock
-        from ..airllm.airllm_gpt_oss import AirLLMGPTOss
         obj = self._bare()
         obj.config = MagicMock()
         obj.model = None
+        obj.get_use_better_transformer = MagicMock(return_value=False)
         mock_model = MagicMock()
         mock_model.model.rotary_emb = None
         mock_ctx = MagicMock()
         mock_ctx.__enter__ = MagicMock(return_value=None)
         mock_ctx.__exit__ = MagicMock(return_value=False)
-        with patch("airllm.airllm_gpt_oss.init_empty_weights", return_value=mock_ctx), \
-             patch("airllm.airllm_gpt_oss.AutoModelForCausalLM.from_config",
+        with patch("airllm.airllm_base.init_empty_weights", return_value=mock_ctx), \
+             patch("airllm.airllm_base.AutoModelForCausalLM.from_config",
                    return_value=mock_model) as mock_from_config, \
-             patch.object(obj, "_finalize_model_init"), \
-             patch.object(obj, "_move_rotary_emb_to_device"):
+             patch.object(obj, "_finalize_model_init"):
             obj.init_model()
         mock_from_config.assert_called_once()
-        self.assertEqual(mock_from_config.call_args.kwargs.get("attn_implementation"), "eager")
+        self.assertEqual(obj.config.attn_implementation, "eager")
+        self.assertEqual(obj._init_strategy, "default")
 
     def test_get_pos_emb_args_returns_position_embeddings(self):
-        """get_pos_emb_args must return {'position_embeddings': (cos, sin)}."""
+        """Without cache it should be empty; with cache it should return sliced cos/sin."""
         import torch
-        from unittest.mock import MagicMock
         obj = self._bare()
-        obj.config = MagicMock()
-        obj.config.hidden_size = 64
-        mock_cos = torch.zeros(1, 8, 32)
-        mock_sin = torch.zeros(1, 8, 32)
-        mock_rotary = MagicMock(return_value=(mock_cos, mock_sin))
-        obj.model = MagicMock()
-        obj.model.model.rotary_emb = mock_rotary
-        result = obj.get_pos_emb_args(0, 8)
+        result = obj.get_pos_emb_args(0, 4)
+        self.assertEqual(result, {})
+
+        cos = torch.zeros(1, 10, 8)
+        sin = torch.ones(1, 10, 8)
+        obj._cached_position_embeddings = (cos, sin)
+        result = obj.get_pos_emb_args(2, 4)
         self.assertIn("position_embeddings", result)
-        cos, sin = result["position_embeddings"]
-        self.assertIsInstance(cos, torch.Tensor)
-        self.assertIsInstance(sin, torch.Tensor)
+        got_cos, got_sin = result["position_embeddings"]
+        self.assertEqual(got_cos.shape, (1, 4, 8))
+        self.assertEqual(got_sin.shape, (1, 4, 8))
