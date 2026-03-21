@@ -116,6 +116,7 @@ class AirLLMBaseModel(GenerationMixin):
 
         self.compression = compression
         self.hf_token = hf_token
+        self.model_local_path_or_repo_id = model_local_path_or_repo_id
 
         # Save parameters
 

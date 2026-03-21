@@ -39,6 +39,7 @@ class TestAutoModel(unittest.TestCase):
 
         cases = [
             ("Qwen3ForCausalLM",    "AirLLMQwen3"),
+            ("Qwen3_5ForConditionalGeneration", "AirLLMQwen3"),
             ("Qwen3MoeForCausalLM", "AirLLMQwen3Moe"),
             ("Qwen3_5MoeForConditionalGeneration", "AirLLMQwen3Moe"),
             ("GptOssForCausalLM", "AirLLMGPTOss"),

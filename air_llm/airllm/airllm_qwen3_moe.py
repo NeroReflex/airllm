@@ -9,10 +9,13 @@ Supports:
 Original implementation by masterx / MasterX1582.
 """
 
+import json
+import os
+
 import torch
 from accelerate import init_empty_weights
 from accelerate.utils.modeling import set_module_tensor_to_device
-from transformers import AutoModelForCausalLM, GenerationConfig
+from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, GenerationConfig
 from transformers.quantizers import AutoHfQuantizer
 
 from .airllm_base import AirLLMBaseModel
@@ -54,6 +57,32 @@ def _is_qwen35_moe_multimodal(config_or_path):
     else:
         archs = getattr(config_or_path, 'architectures', []) or []
     return any('Qwen3_5Moe' in a for a in archs)
+
+
+def _get_architectures(config_or_path):
+    if isinstance(config_or_path, str):
+        cfg_path = os.path.join(config_or_path, 'config.json')
+        if os.path.exists(cfg_path):
+            with open(cfg_path) as f:
+                data = json.load(f)
+            return data.get('architectures', []) or []
+        try:
+            cfg = AutoConfig.from_pretrained(config_or_path, trust_remote_code=True)
+            return getattr(cfg, 'architectures', []) or []
+        except Exception:
+            return []
+    return getattr(config_or_path, 'architectures', []) or []
+
+
+def _is_qwen35_dense_conditional(config_or_path):
+    return any('Qwen3_5ForConditionalGeneration' in a for a in _get_architectures(config_or_path))
+
+
+def _build_qwen35_dense_skeleton(config):
+    from transformers.models.qwen3_5.modeling_qwen3_5 import (
+        Qwen3_5ForConditionalGeneration,
+    )
+    return Qwen3_5ForConditionalGeneration(config)
 
 
 # ---------------------------------------------------------------------------
@@ -286,9 +315,113 @@ class AirLLMQwen3(AirLLMBaseModel):
         return GenerationConfig()
 
     def set_layer_names_dict(self):
-        self.layer_names_dict = {
-            'embed': 'model.embed_tokens',
-            'layer_prefix': 'model.layers',
-            'norm': 'model.norm',
-            'lm_head': 'lm_head',
-        }
+        path = getattr(self, 'model_local_path_or_repo_id', None) or ''
+        if _is_qwen35_dense_conditional(path):
+            self.layer_names_dict = {
+                'embed': 'model.language_model.embed_tokens',
+                'layer_prefix': 'model.language_model.layers',
+                'norm': 'model.language_model.norm',
+                'lm_head': 'lm_head',
+            }
+        else:
+            self.layer_names_dict = {
+                'embed': 'model.embed_tokens',
+                'layer_prefix': 'model.layers',
+                'norm': 'model.norm',
+                'lm_head': 'lm_head',
+            }
+
+    def init_model(self):
+        self.model = None
+        self.hf_quantizer = None
+
+        if _is_qwen35_dense_conditional(self.config):
+            print("Qwen3.5 dense: building conditional-generation skeleton...")
+            try:
+                with init_empty_weights():
+                    self.model = _build_qwen35_dense_skeleton(self.config)
+            except Exception as e:
+                clean_memory()
+                raise RuntimeError(
+                    f"Failed to build Qwen3.5 dense model skeleton: {e}\n"
+                    "Ensure transformers>=5.3.0 is installed."
+                ) from e
+
+            quantization_config = getattr(self.config, "quantization_config", None)
+            if quantization_config is not None:
+                self.hf_quantizer = AutoHfQuantizer.from_config(
+                    quantization_config, pre_quantized=True
+                )
+                device_map = self.hf_quantizer.update_device_map(None)
+                self.hf_quantizer.preprocess_model(model=self.model, device_map=device_map)
+
+            self.model.eval()
+            self.model.tie_weights()
+            self.set_layers_from_layer_names()
+
+            for buffer_name, buffer in self.model.named_buffers():
+                set_module_tensor_to_device(
+                    self.model, buffer_name, self.running_device,
+                    value=buffer, dtype=self.running_dtype,
+                )
+
+            try:
+                self.model.model.language_model.rotary_emb.to(
+                    device=self.running_device, dtype=self.running_dtype
+                )
+            except Exception:
+                pass
+            self._init_strategy = 'qwen35_dense'
+        else:
+            super().init_model()
+
+    def _init_model_fast(self):
+        if getattr(self, '_init_strategy', None) == 'qwen35_dense':
+            with init_empty_weights():
+                self.model = _build_qwen35_dense_skeleton(self.config)
+
+            quantization_config = getattr(self.config, "quantization_config", None)
+            if quantization_config is not None:
+                self.hf_quantizer = AutoHfQuantizer.from_config(
+                    quantization_config, pre_quantized=True
+                )
+                device_map = self.hf_quantizer.update_device_map(None)
+                self.hf_quantizer.preprocess_model(model=self.model, device_map=device_map)
+
+            self.model.eval()
+            self.model.tie_weights()
+            self.set_layers_from_layer_names()
+
+            for buffer_name, buffer in self.model.named_buffers():
+                set_module_tensor_to_device(
+                    self.model, buffer_name, self.running_device,
+                    value=buffer, dtype=self.running_dtype,
+                )
+            return
+        super()._init_model_fast()
+
+    def get_attention_mask_args(self, full_attention_mask, len_p, len_s):
+        if _is_qwen35_dense_conditional(self.config):
+            return {}
+        return super().get_attention_mask_args(full_attention_mask, len_p, len_s)
+
+    def get_pos_emb_args(self, len_p, len_s):
+        if not _is_qwen35_dense_conditional(self.config):
+            return super().get_pos_emb_args(len_p, len_s)
+        try:
+            rotary_emb = self.model.model.language_model.rotary_emb
+            head_dim = rotary_emb.inv_freq.shape[0] * 2
+            x = torch.zeros(
+                1, len_s, head_dim,
+                dtype=self.running_dtype, device=self.running_device,
+            )
+            position_ids = torch.arange(
+                len_p, len_p + len_s,
+                dtype=torch.long, device=self.running_device,
+            ).unsqueeze(0)
+            with torch.no_grad():
+                cos, sin = rotary_emb(x, position_ids)
+            return {'position_embeddings': (cos, sin)}
+        except Exception as e:
+            print(f"Qwen3.5 dense get_pos_emb_args failed: {e}", flush=True)
+            return {}

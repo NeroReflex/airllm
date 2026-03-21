@@ -143,3 +143,20 @@ class TestRealModelBackends(unittest.TestCase):
         )
         self.assertIsInstance(out, str)
         self.assertGreater(len(out), 0)
+
+    def test_qwen35_27b_cuda_smoke(self):
+        _ensure_cuda_or_skip(self)
+        _ensure_env_enabled_or_skip(
+            self,
+            "AIRLLM_RUN_QWEN35_27B",
+            "This smoke test is intentionally gated because first run can take several minutes "
+            "and requires downloading/splitting a large checkpoint.",
+        )
+        out = _run_smoke(
+            model_id="Jackrong/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled",
+            device="cuda:0",
+            prompt="Say hello in one short sentence.",
+            max_new_tokens=8,
+        )
+        self.assertIsInstance(out, str)
+        self.assertGreater(len(out), 0)

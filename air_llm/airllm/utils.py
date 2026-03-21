@@ -1,6 +1,7 @@
 import gc
 import json
 import os
+import re
 import ctypes
 import shutil
 from tqdm import tqdm
@@ -247,7 +248,16 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
     if layer_names is None:
         n_layers = len(set([int(k.split('.')[2]) for k in index.keys() if 'model.layers' in k]))
     else:
-        n_layers = len(set([int(k[len(layer_names['layer_prefix']):].split('.')[1]) for k in index.keys() if layer_names['layer_prefix'] in k]))
+        layer_prefix = layer_names['layer_prefix']
+        layer_re = re.compile(rf'^{re.escape(layer_prefix)}\.(\d+)\.')
+        n_layers = len(
+            set(
+                int(m.group(1))
+                for k in index.keys()
+                for m in [layer_re.match(k)]
+                if m is not None
+            )
+        )
 
     if layer_names is None:
         layers = ['model.embed_tokens.'] + [f'model.layers.{i}.' for i in range(n_layers)] + ['model.norm.', 'lm_head.']

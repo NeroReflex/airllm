@@ -39,8 +39,8 @@ class AutoModel:
         # Qwen3 MoE variants (check before Qwen2/Qwen to avoid prefix matches)
         elif "Qwen3_5Moe" in arch or "Qwen3MoeForCausalLM" in arch:
             return "airllm", "AirLLMQwen3Moe"
-        # Qwen3 dense
-        elif "Qwen3ForCausalLM" in arch:
+        # Qwen3 / Qwen3.5 dense
+        elif "Qwen3ForCausalLM" in arch or "Qwen3_5ForConditionalGeneration" in arch:
             return "airllm", "AirLLMQwen3"
         # Qwen2
         elif "Qwen2ForCausalLM" in arch:
