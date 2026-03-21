@@ -77,3 +77,14 @@ class TestRealModelBackends(unittest.TestCase):
         )
         self.assertIsInstance(out, str)
         self.assertGreater(len(out), 0)
+
+    def test_gpt_oss_20b_cuda_smoke(self):
+        _ensure_cuda_or_skip(self)
+        out = _run_smoke(
+            model_id="unsloth/gpt-oss-20b",
+            device="cuda:0",
+            prompt="What is the capital of France?",
+            max_new_tokens=6,
+        )
+        self.assertIsInstance(out, str)
+        self.assertGreater(len(out), 0)
