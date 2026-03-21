@@ -1,12 +1,9 @@
-import os
 import unittest
 
 import torch
 
 from airllm import AutoModel
 
-
-RUN_REAL_MODEL_SMOKE = os.getenv("AIRLLM_RUN_REAL_MODEL_SMOKE", "0") == "1"
 
 
 def _ensure_cuda_or_skip(test_case):
@@ -38,7 +35,6 @@ def _run_smoke(model_id, device, prompt, max_new_tokens=6):
     return decoded
 
 
-@unittest.skipUnless(RUN_REAL_MODEL_SMOKE, "Set AIRLLM_RUN_REAL_MODEL_SMOKE=1 to run real-model backend tests")
 class TestRealModelBackends(unittest.TestCase):
     def test_tinyllama_cuda_smoke(self):
         _ensure_cuda_or_skip(self)
