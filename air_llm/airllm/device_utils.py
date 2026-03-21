@@ -4,6 +4,7 @@ Device abstraction utilities for AirLLM.
 Adds support for:
   - NVIDIA CUDA  (device="cuda:0")
   - Intel / AMD integrated GPU via DirectML on Windows  (device="privateuseone:0")
+    - Intel integrated GPU via XPU on Linux  (device="xpu:0")
   - Apple Silicon via MPS  (device="mps")   [MLX path handles this separately]
   - CPU fallback  (device="cpu")
 """
@@ -21,6 +22,22 @@ try:
     _directml_available = True
 except ImportError:
     _directml_available = False
+
+
+def is_xpu_available() -> bool:
+    if not hasattr(torch, "xpu"):
+        return False
+    try:
+        return torch.xpu.is_available()
+    except Exception:
+        return False
+
+
+def get_xpu_device(index: int = 0):
+    """Return an Intel XPU device handle, or None if unavailable."""
+    if is_xpu_available():
+        return torch.device(f"xpu:{index}")
+    return None
 
 
 def is_directml_available() -> bool:
@@ -42,7 +59,7 @@ def get_directml_device(index: int = 0):
 def get_device_type(device: str) -> str:
     """
     Normalise a device string to one of:
-      "cuda" | "directml" | "mps" | "cpu"
+      "cuda" | "directml" | "xpu" | "mps" | "cpu"
     """
     d = str(device).lower()
     if d.startswith("cuda"):
@@ -50,6 +67,8 @@ def get_device_type(device: str) -> str:
     # torch-directml registers as "privateuseone" internally
     if d.startswith("privateuseone") or d.startswith("dml") or d.startswith("directml"):
         return "directml"
+    if d.startswith("xpu"):
+        return "xpu"
     if d.startswith("mps"):
         return "mps"
     return "cpu"
@@ -63,10 +82,14 @@ def is_directml_device(device: str) -> bool:
     return get_device_type(device) == "directml"
 
 
+def is_xpu_device(device: str) -> bool:
+    return get_device_type(device) == "xpu"
+
+
 def can_pin_memory(device: str) -> bool:
     """
     pin_memory() is only meaningful when copying to CUDA.
-    It's a no-op (and sometimes errors) for DirectML / MPS / CPU targets.
+    It's a no-op (and sometimes errors) for DirectML / XPU / MPS / CPU targets.
     """
     return is_cuda_device(device)
 
@@ -80,6 +103,12 @@ def empty_cache(device: str) -> None:
     dtype = get_device_type(device)
     if dtype == "cuda":
         torch.cuda.empty_cache()
+    elif dtype == "xpu":
+        if hasattr(torch, "xpu") and hasattr(torch.xpu, "empty_cache"):
+            try:
+                torch.xpu.empty_cache()
+            except Exception:
+                pass
     elif dtype == "mps":
         # torch.mps.empty_cache() is available in PyTorch >= 2.0
         # but calling it on a non-Mac machine raises RuntimeError
@@ -106,6 +135,12 @@ def get_free_memory_bytes(device: str) -> int:
             return free
         except Exception:
             return -1
+    if dtype == "xpu":
+        try:
+            free, _ = torch.xpu.mem_get_info()
+            return free
+        except Exception:
+            return -1
     # MPS / DirectML / CPU: no reliable API yet
     return -1
 
@@ -117,6 +152,6 @@ def get_free_memory_bytes(device: str) -> int:
 def supports_bitsandbytes(device: str) -> bool:
     """
     bitsandbytes only works on NVIDIA CUDA devices.
-    Integrated GPUs (DirectML / MPS) must skip compression.
+    Integrated GPUs (DirectML / XPU / MPS) must skip compression.
     """
     return is_cuda_device(device)

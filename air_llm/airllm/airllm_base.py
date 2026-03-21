@@ -109,7 +109,7 @@ class AirLLMBaseModel(GenerationMixin):
             if not supports_bitsandbytes(device):
                 raise ValueError(
                     f"Compression ('4bit'/'8bit') requires a CUDA (NVIDIA) device but got device='{device}'. "
-                    f"Integrated GPU / DirectML / MPS devices do not support bitsandbytes. "
+                    f"Integrated GPU / DirectML / XPU / MPS devices do not support bitsandbytes. "
                     f"Run without compression=... on this device."
                 )
 
@@ -171,7 +171,7 @@ class AirLLMBaseModel(GenerationMixin):
             print(f"not support prefetching for compression for now. loading with no prepetching mode.")
 
         # CUDA streams are only available on NVIDIA GPUs.
-        # For DirectML / MPS / CPU we still prefetch using ThreadPoolExecutor
+        # For DirectML / XPU / MPS / CPU we still prefetch using ThreadPoolExecutor
         # but without a CUDA stream (stream = None).
         if prefetching and is_cuda_device(device):
             self.stream = torch.cuda.Stream()

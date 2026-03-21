@@ -5,10 +5,13 @@ from airllm.device_utils import (
     get_device_type,
     is_cuda_device,
     is_directml_device,
+    is_xpu_device,
     can_pin_memory,
     supports_bitsandbytes,
     is_directml_available,
     get_directml_device,
+    is_xpu_available,
+    get_xpu_device,
     empty_cache,
     get_free_memory_bytes,
 )
@@ -27,6 +30,11 @@ class TestGetDeviceType(unittest.TestCase):
         self.assertEqual(get_device_type("privateuseone:1"), "directml")
         self.assertEqual(get_device_type("dml:0"), "directml")
         self.assertEqual(get_device_type("directml:0"), "directml")
+
+    def test_xpu_variants(self):
+        self.assertEqual(get_device_type("xpu"), "xpu")
+        self.assertEqual(get_device_type("xpu:0"), "xpu")
+        self.assertEqual(get_device_type("XPU:1"), "xpu")
 
     def test_mps(self):
         self.assertEqual(get_device_type("mps"), "mps")
@@ -50,10 +58,16 @@ class TestDeviceBoolHelpers(unittest.TestCase):
         self.assertFalse(is_directml_device("cuda:0"))
         self.assertFalse(is_directml_device("cpu"))
 
+    def test_is_xpu_device(self):
+        self.assertTrue(is_xpu_device("xpu:0"))
+        self.assertFalse(is_xpu_device("cuda:0"))
+        self.assertFalse(is_xpu_device("cpu"))
+
     def test_can_pin_memory(self):
         # pin_memory is only useful when copying to CUDA
         self.assertTrue(can_pin_memory("cuda:0"))
         self.assertFalse(can_pin_memory("privateuseone:0"))
+        self.assertFalse(can_pin_memory("xpu:0"))
         self.assertFalse(can_pin_memory("mps"))
         self.assertFalse(can_pin_memory("cpu"))
 
@@ -61,6 +75,7 @@ class TestDeviceBoolHelpers(unittest.TestCase):
         # bitsandbytes is NVIDIA-only
         self.assertTrue(supports_bitsandbytes("cuda:0"))
         self.assertFalse(supports_bitsandbytes("privateuseone:0"))
+        self.assertFalse(supports_bitsandbytes("xpu:0"))
         self.assertFalse(supports_bitsandbytes("mps"))
         self.assertFalse(supports_bitsandbytes("cpu"))
 
@@ -72,6 +87,9 @@ class TestEmptyCache(unittest.TestCase):
 
     def test_empty_cache_directml_does_not_crash(self):
         empty_cache("privateuseone:0")
+
+    def test_empty_cache_xpu_does_not_crash(self):
+        empty_cache("xpu:0")
 
     @unittest.skipUnless(
         hasattr(torch.backends, "mps") and torch.backends.mps.is_available(),
@@ -92,6 +110,11 @@ class TestGetFreeMemoryBytes(unittest.TestCase):
 
     def test_returns_minus_one_for_directml(self):
         self.assertEqual(get_free_memory_bytes("privateuseone:0"), -1)
+
+    def test_returns_minus_one_for_xpu_when_unavailable(self):
+        if is_xpu_available():
+            self.skipTest("XPU is available on this machine")
+        self.assertEqual(get_free_memory_bytes("xpu:0"), -1)
 
     def test_returns_minus_one_for_mps(self):
         self.assertEqual(get_free_memory_bytes("mps"), -1)
@@ -118,4 +141,23 @@ class TestDirectMLDetection(unittest.TestCase):
         if is_directml_available():
             self.skipTest("torch-directml is installed on this machine")
         result = get_directml_device(0)
+        self.assertIsNone(result)
+
+
+class TestXpuDetection(unittest.TestCase):
+
+    def test_is_xpu_available_returns_bool(self):
+        result = is_xpu_available()
+        self.assertIsInstance(result, bool)
+
+    @unittest.skipUnless(is_xpu_available(), "XPU not available")
+    def test_get_xpu_device_returns_valid_device(self):
+        dev = get_xpu_device(0)
+        self.assertIsNotNone(dev)
+        self.assertEqual(str(dev), "xpu:0")
+
+    def test_get_xpu_device_returns_none_when_unavailable(self):
+        if is_xpu_available():
+            self.skipTest("XPU is available on this machine")
+        result = get_xpu_device(0)
         self.assertIsNone(result)

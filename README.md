@@ -82,6 +82,7 @@
 * [Configurations](#configurations)
 * [Run on MacOS](#macos)
 * [Windows Integrated GPU (Intel/AMD)](#windows-integrated-gpu-intelamd)
+* [Linux Intel iGPU (XPU, experimental)](#linux-intel-igpu-xpu-experimental)
 * [Example notebooks](#example-python-notebook)
 * [Supported Models](#supported-models)
 * [Acknowledgement](#acknowledgement)
@@ -303,6 +304,34 @@ print(model.tokenizer.decode(generation_output.sequences[0]))
 * **Compression not supported on iGPU** — `bitsandbytes` (used for `4bit`/`8bit` compression) requires an NVIDIA GPU. Do not pass `compression=` when using DirectML. AirLLM will raise a clear error if you try.
 * Prefetching (background disk loading) still works on DirectML via `ThreadPoolExecutor`.
 * Memory info (`profiling_mode=True`) reports `n/a` for iGPU — DirectML does not expose a free-memory API.
+
+## Linux Intel iGPU (XPU, experimental)
+
+AirLLM also includes an experimental Linux Intel iGPU path via PyTorch `xpu` devices, for example `device="xpu:0"`.
+
+### Requirements
+
+* An Intel GPU runtime/driver stack that exposes the iGPU to PyTorch XPU
+* An **XPU-enabled** PyTorch build
+* `torch.xpu.is_available()` must return `True`
+
+### Example
+
+```python
+from airllm import AutoModel
+
+model = AutoModel.from_pretrained(
+    "Qwen/Qwen2.5-0.5B-Instruct",
+    device="xpu:0",
+)
+```
+
+### Notes
+
+* This path reuses the same AirLLM layer-by-layer loading flow already used for CUDA / DirectML / CPU.
+* `bitsandbytes` compression is **not** supported on XPU.
+* No Vulkan backend is provided by AirLLM.
+* The XPU tests are automatically skipped when `torch.xpu.is_available()` is `False`.
 
 ## Example Python Notebook
 
