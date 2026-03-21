@@ -381,6 +381,10 @@ class AirLLMBaseModel(GenerationMixin):
         return [self.load_layer_to_cpu(name) for name in layer_names]
 
     def move_layer_to_device(self, state_dict):
+        # transformers >=5 may compute rotary embeddings dynamically and no longer
+        # expose rotary_emb as a module attribute in attention blocks.
+        state_dict = {k: v for k, v in state_dict.items() if 'rotary_emb' not in k}
+
         layers = []
         for param_name, param in state_dict.items():
             if self.hf_quantizer is None:

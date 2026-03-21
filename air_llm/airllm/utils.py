@@ -324,20 +324,35 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
 
         else:
             shards = [v for k, v in index.items() if k.startswith(layer)]
-            single_modelfile = shards[0]
-            to_load = checkpoint_path / single_modelfile
-            # check if to_load exist, if not downloaad it...
-            if not os.path.exists(to_load):
-                assert repo_id is not None
-                huggingface_hub.snapshot_download(repo_id, allow_patterns=os.path.basename(to_load),
-                                                token=hf_token)
-            if not safetensors_format:
-                state_dict.update(torch.load(to_load, map_location='cpu'))
+            if len(shards) > 0:
+                single_modelfile = shards[0]
+                to_load = checkpoint_path / single_modelfile
+                # check if to_load exist, if not downloaad it...
+                if not os.path.exists(to_load):
+                    assert repo_id is not None
+                    huggingface_hub.snapshot_download(repo_id, allow_patterns=os.path.basename(to_load),
+                                                    token=hf_token)
+                if not safetensors_format:
+                    state_dict.update(torch.load(to_load, map_location='cpu'))
+                else:
+                    state_dict.update(load_file(to_load, device='cpu'))
             else:
-                state_dict.update(load_file(to_load, device='cpu'))
+                # Some models tie output head with embeddings and don't store
+                # a standalone lm_head tensor in checkpoints.
+                if not layer.endswith('lm_head.'):
+                    raise KeyError(f"No checkpoint weights found for expected layer prefix: {layer}")
 
         # Get layer state dict
         layer_state_dict = dict([(k, v) for k, v in state_dict.items() if k.startswith(layer)])
+
+        # For tied-output models, synthesize lm_head from embedding weights.
+        if len(layer_state_dict) == 0 and layer.endswith('lm_head.'):
+            embed_prefix = 'model.embed_tokens.'
+            if layer_names is not None:
+                embed_prefix = layer_names['embed'] + '.'
+            embed_key = embed_prefix + 'weight'
+            if embed_key in state_dict:
+                layer_state_dict = {layer + 'weight': state_dict[embed_key]}
 
         layer_state_dict = compress_layer_state_dict(layer_state_dict, compression)
 

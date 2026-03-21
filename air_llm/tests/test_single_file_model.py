@@ -43,6 +43,11 @@ class TestSingleFileModelSplit(unittest.TestCase):
             "lm_head.weight":                         torch.randn(vocab, hidden),
         }
 
+    def _make_fake_model_state_without_lm_head(self):
+        state = self._make_fake_model_state()
+        del state["lm_head.weight"]
+        return state
+
     # ------------------------------------------------------------------
     # single model.safetensors (no index)
     # ------------------------------------------------------------------
@@ -79,6 +84,22 @@ class TestSingleFileModelSplit(unittest.TestCase):
         self.assertTrue(os.path.isdir(split_path))
         self.assertTrue(
             os.path.exists(os.path.join(split_path, "model.embed_tokens.safetensors"))
+        )
+
+    # ------------------------------------------------------------------
+    # single model.safetensors without lm_head (tied output embedding)
+    # ------------------------------------------------------------------
+    def test_split_single_safetensors_without_lm_head(self):
+        state = self._make_fake_model_state_without_lm_head()
+        save_file(state, os.path.join(self.tmpdir, "model.safetensors"))
+
+        from airllm.utils import split_and_save_layers
+        split_path = split_and_save_layers(self.tmpdir)
+
+        self.assertTrue(os.path.isdir(split_path))
+        self.assertTrue(
+            os.path.exists(os.path.join(split_path, "lm_head.safetensors")),
+            "Expected lm_head shard to be synthesized for tied-output models",
         )
 
     # ------------------------------------------------------------------
