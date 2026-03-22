@@ -44,6 +44,7 @@ class TestAutoModel(unittest.TestCase):
             ("Qwen3_5MoeForConditionalGeneration", "AirLLMQwen3Moe"),
             ("Qwen3NextForCausalLM", "AirLLMQwen3Moe"),
             ("MllamaForConditionalGeneration", "AirLLMMllama"),
+            ("SpeechT5ForTextToSpeech", "AirLLMSpeechT5"),
             ("GptOssForCausalLM", "AirLLMGPTOss"),
         ]
 

@@ -244,6 +244,21 @@ class TestRealModelBackends(unittest.TestCase):
         self.assertIsInstance(decoded, str)
         self.assertGreater(len(decoded.strip()), 0)
 
+    def test_speecht5_tts_cpu_smoke(self):
+        _ensure_env_enabled_or_skip(
+            self,
+            "AIRLLM_RUN_SPEECHT5_TTS",
+            "This smoke test is gated because it downloads SpeechT5 and vocoder checkpoints.",
+        )
+
+        model = AutoModel.from_pretrained(
+            "microsoft/speecht5_tts",
+            device="cpu",
+        )
+        wav = model.tts("Hello from AirLLM.")
+        self.assertIsInstance(wav, torch.Tensor)
+        self.assertGreater(wav.numel(), 0)
+
     def test_qwen3_coder_next_tool_calling(self):
         """Test tool-calling capability of Qwen3-Coder-Next-FP8-Dynamic.
         
