@@ -225,6 +225,26 @@ class TestApplyChatTemplate(unittest.TestCase):
             MESSAGES, tokenize=False, add_generation_prompt=True, tools=tools
         )
 
+    def test_tool_choice_forwarded_to_apply_chat_template(self):
+        tok = MagicMock()
+        tok.apply_chat_template.return_value = "<tool_call>..."
+        runner = _runner_with_tokenizer(tokenizer=tok)
+
+        prompt, used = runner._apply_chat_template(
+            MESSAGES,
+            tools=[{"type": "function", "function": {"name": "get_weather"}}],
+            tool_choice={"type": "function", "function": {"name": "get_weather"}},
+        )
+
+        self.assertTrue(used)
+        tok.apply_chat_template.assert_called_once_with(
+            MESSAGES,
+            tokenize=False,
+            add_generation_prompt=True,
+            tools=[{"type": "function", "function": {"name": "get_weather"}}],
+            tool_choice={"type": "function", "function": {"name": "get_weather"}},
+        )
+
     def test_fallback_to_naive_when_tokenizer_raises(self):
         tok = MagicMock()
         tok.apply_chat_template.side_effect = Exception("no template")

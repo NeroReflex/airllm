@@ -107,6 +107,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             top_p=req.top_p if req.top_p is not None else settings.top_p,
             max_tokens=req.max_tokens if req.max_tokens is not None else settings.max_new_tokens,
             tools=req.tools or None,
+            tool_choice=req.tool_choice,
         )
 
         body = {

@@ -147,6 +147,7 @@ class ServerRunner:
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
     ) -> tuple[str, list[Any], bool]:
         """Convert an OpenAI-style messages list into a text prompt + images.
 
@@ -180,13 +181,18 @@ class ServerRunner:
                 text_messages.append(msg)
 
         # 2. Build the text prompt via the chat template or naive fallback.
-        prompt, used_template = self._apply_chat_template(text_messages, tools=tools)
+        prompt, used_template = self._apply_chat_template(
+            text_messages,
+            tools=tools,
+            tool_choice=tool_choice,
+        )
         return prompt, images, used_template
 
     def _apply_chat_template(
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
     ) -> tuple[str, bool]:
         """Apply a Jinja2 chat template to text-only messages.
 
@@ -232,6 +238,8 @@ class ServerRunner:
                 kwargs["chat_template"] = template_str
             if tools:
                 kwargs["tools"] = tools
+            if tool_choice is not None:
+                kwargs["tool_choice"] = tool_choice
             prompt: str = tokenizer.apply_chat_template(messages, **kwargs)
             return prompt, True
         except Exception:
@@ -325,10 +333,13 @@ class ServerRunner:
         temperature: float,
         top_p: float,
         tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         self.load_model_if_needed(model_id)
         prompt, images, used_template = self._flatten_messages_to_prompt(
-            messages, tools=tools
+            messages,
+            tools=tools,
+            tool_choice=tool_choice,
         )
 
         if images and hasattr(self.model, "get_processor"):
