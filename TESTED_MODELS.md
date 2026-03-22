@@ -14,6 +14,7 @@ This file records models and backends that have been exercised in this workspace
 | `unsloth/gpt-oss-20b` | CUDA | Passed | Two-pass same-instance reuse smoke test |
 | `unsloth/gpt-oss-120b` | CUDA | Passed | End-to-end run completed successfully; first run took about 27 minutes due to download/splitting |
 | `Jackrong/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled` | CUDA | Passed | End-to-end run succeeded in about 194s after adding `Qwen3_5ForConditionalGeneration` routing, nested `model.language_model.*` support, and robust shard-prefix parsing |
+| `unsloth/phi-4` | CUDA | Passed | End-to-end run completed successfully; first run took about 1033s due to download/splitting, then inference completed through `AirLLMLlama2` |
 
 ## Backend / Device Validation
 
@@ -31,6 +32,7 @@ This file records models and backends that have been exercised in this workspace
 | --- | --- | --- |
 | GPT-OSS 120B smoke | `AIRLLM_RUN_GPT_OSS_120B=1` | Intentionally gated because it can take tens of minutes and download/split a very large checkpoint |
 | Qwen3.5-27B smoke | `AIRLLM_RUN_QWEN35_27B=1` | Intentionally gated because first run may need to download/split a large checkpoint |
+| Phi-4 smoke | `AIRLLM_RUN_PHI4=1` | Intentionally gated because first run may need to download/split a large checkpoint |
 
 ## Notes
 
@@ -41,6 +43,7 @@ This file records models and backends that have been exercised in this workspace
   - `Qwen3MoeForCausalLM`
   - `Qwen3_5MoeForConditionalGeneration`
 - Real backend smoke tests live in `air_llm/tests/test_real_model_backends.py`.
+- `unsloth/phi-4` currently resolves through the Llama path (`LlamaForCausalLM` -> `AirLLMLlama2`) and passed an end-to-end CUDA smoke run.
 - Compatibility fixes verified for `Jackrong/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled`:
   - `Qwen3_5ForConditionalGeneration` now routes to `AirLLMQwen3`
   - dense Qwen3.5 wrapper layout uses `model.language_model.*`
