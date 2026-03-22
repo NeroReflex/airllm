@@ -176,6 +176,38 @@ curl http://127.0.0.1:8000/v1/audio/speech \
     -d '{"model":"microsoft/speecht5_tts","input":"Hello from AirLLM."}' \
     --output out.wav
 ```
+
+### Native standalone executable
+
+Build a full standalone native executable (Nuitka onefile build):
+
+```bash
+make native-standalone
+```
+
+Notes:
+
+* Full standalone build is pinned to Python 3.13 for stability.
+* Output binary path: `air_llm/build/native/airllm`.
+
+Install or remove it system-wide:
+
+```bash
+# install to /usr/local/bin/airllm (or set PREFIX=...)
+sudo make install-native
+
+# remove /usr/local/bin/airllm
+sudo make uninstall-native
+```
+
+### Release artifacts via Git tags
+
+Pushing a tag like `v2.12.1` triggers `.github/workflows/release-native.yml`, which:
+
+* builds the standalone Linux binary with Python 3.13,
+* packages `dist/airllm-<tag>-linux-x86_64.tar.gz`,
+* generates a SHA256 checksum file,
+* publishes both files to the GitHub Release.
  
 
 ## Model Compression - 3x Inference Speed Up!

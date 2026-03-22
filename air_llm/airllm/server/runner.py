@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import base64
 import io
 import threading
@@ -6,8 +8,6 @@ import uuid
 from typing import Any
 
 import requests
-from PIL import Image
-from scipy.io.wavfile import write as wav_write
 
 from airllm import AutoModel
 
@@ -46,8 +46,8 @@ class ServerRunner:
             self.tokenizer: Any | None = getattr(self.model, "tokenizer", None)
             self.loaded_model_id: str = target_model
 
-    def _flatten_messages_to_prompt(self, messages: list[dict[str, Any]]) -> tuple[str, list[Image.Image]]:
-        images: list[Image.Image] = []
+    def _flatten_messages_to_prompt(self, messages: list[dict[str, Any]]) -> tuple[str, list[Any]]:
+        images: list[Any] = []
         parts: list[str] = []
 
         for msg in messages:
@@ -63,7 +63,7 @@ class ServerRunner:
                     if part.get("type") == "text":
                         text_chunks.append(part.get("text", ""))
                     elif part.get("type") == "image_url":
-                        img: Image.Image | None = self._load_image_from_url(part.get("image_url", {}).get("url", ""))
+                        img = self._load_image_from_url(part.get("image_url", {}).get("url", ""))
                         if img is not None:
                             images.append(img)
                             text_chunks.append("<|image|>")
@@ -72,7 +72,12 @@ class ServerRunner:
         parts.append("ASSISTANT:")
         return "\n".join(parts), images
 
-    def _load_image_from_url(self, url: str) -> Image.Image | None:
+    def _load_image_from_url(self, url: str) -> Any | None:
+        try:
+            from PIL import Image
+        except ModuleNotFoundError:
+            return None
+
         if not url:
             return None
         if url.startswith("data:image"):
@@ -192,6 +197,11 @@ class ServerRunner:
         }
 
     def synthesize_speech(self, text: str, model_id: str | None) -> bytes:
+        try:
+            from scipy.io.wavfile import write as wav_write
+        except ModuleNotFoundError as exc:
+            raise RuntimeError("SciPy is required for audio synthesis output") from exc
+
         self.load_model_if_needed(model_id)
         if not hasattr(self.model, "tts"):
             raise RuntimeError("Current model backend does not support text-to-speech")
