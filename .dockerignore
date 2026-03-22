@@ -1,0 +1,14 @@
+.git
+.gitignore
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+.venv
+.venv313
+air_llm/build
+air_llm/tests
+air_llm/examples/*.ipynb

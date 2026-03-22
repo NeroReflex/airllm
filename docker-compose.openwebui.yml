@@ -1,0 +1,40 @@
+services:
+  airllm-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-local}/airllm-openai:local
+    container_name: airllm-api
+    environment:
+      AIRLLM_MODEL: ${AIRLLM_MODEL:-TinyLlama/TinyLlama-1.1B-Chat-v1.0}
+      AIRLLM_PORT: 8000
+      AIRLLM_HOST: 0.0.0.0
+      AIRLLM_DEVICE: ${AIRLLM_DEVICE:-cpu}
+      AIRLLM_API_KEY: ${AIRLLM_API_KEY:-changeme}
+      AIRLLM_ENFORCE_AUTH: ${AIRLLM_ENFORCE_AUTH:-true}
+      HF_TOKEN: ${HF_TOKEN:-}
+    ports:
+      - "8000:8000"
+    volumes:
+      - huggingface-cache:/root/.cache/huggingface
+    restart: unless-stopped
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    depends_on:
+      - airllm-api
+    environment:
+      OPENAI_API_BASE_URL: http://airllm-api:8000/v1
+      OPENAI_API_KEY: ${AIRLLM_API_KEY:-changeme}
+      ENABLE_OPENAI_API: "true"
+      WEBUI_AUTH: ${WEBUI_AUTH:-false}
+    ports:
+      - "3000:8080"
+    volumes:
+      - open-webui-data:/app/backend/data
+    restart: unless-stopped
+
+volumes:
+  huggingface-cache:
+  open-webui-data:

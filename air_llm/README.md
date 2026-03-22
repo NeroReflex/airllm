@@ -3,6 +3,7 @@
 [**Quickstart**](#quickstart) | 
 [**Configurations**](#configurations) | 
 [**OpenAI-Compatible Server**](#openai-compatible-server) | 
+[**Docker**](#docker-openai-api--open-webui) | 
 [**MacOS**](#macos) | 
 [**Example notebooks**](#example-python-notebook) | 
 [**FAQ**](#faq)
@@ -49,6 +50,7 @@
 * [Model Compression](#model-compression---3x-inference-speed-up)
 * [Configurations](#configurations)
 * [OpenAI-Compatible Server](#openai-compatible-server)
+* [Docker (OpenAI API + Open WebUI)](#docker-openai-api--open-webui)
 * [Run on MacOS](#macos)
 * [Example notebooks](#example-python-notebook)
 * [Supported Models](#supported-models)
@@ -177,6 +179,27 @@ curl http://127.0.0.1:8000/v1/audio/speech \
     --output out.wav
 ```
 
+### Python HTTP examples
+
+Query a served text model:
+
+```bash
+python air_llm/examples/query_served_model_text.py \
+    --base-url http://127.0.0.1:8000 \
+    --model garage-bAInd/Platypus2-7B \
+    --prompt "What is the capital of France?"
+```
+
+Exercise the transcription endpoint with an audio file:
+
+```bash
+python air_llm/examples/test_served_model_transcription.py \
+    --base-url http://127.0.0.1:8000 \
+    --model openai/whisper-small
+```
+
+Note: the transcription endpoint currently returns `501 Not Implemented` until a speech-to-text backend is added. The example is useful as an HTTP smoke test for the served API path.
+
 ### Native standalone executable
 
 Build a full standalone native executable (Nuitka onefile build):
@@ -208,6 +231,45 @@ Pushing a tag like `v2.12.1` triggers `.github/workflows/release-native.yml`, wh
 * packages `dist/airllm-<tag>-linux-x86_64.tar.gz`,
 * generates a SHA256 checksum file,
 * publishes both files to the GitHub Release.
+
+## Docker (OpenAI API + Open WebUI)
+
+### Build and run the AirLLM OpenAI-compatible API container
+
+```bash
+docker build -t airllm-openai:local .
+
+docker run --rm -p 8000:8000 \
+    -e AIRLLM_MODEL=garage-bAInd/Platypus2-7B \
+    -e AIRLLM_DEVICE=cpu \
+    -e AIRLLM_API_KEY=changeme \
+    -e AIRLLM_ENFORCE_AUTH=true \
+    airllm-openai:local
+```
+
+### Run AirLLM API + Open WebUI together (docker compose)
+
+```bash
+AIRLLM_MODEL=garage-bAInd/Platypus2-7B \
+AIRLLM_API_KEY=changeme \
+docker compose -f docker-compose.openwebui.yml up -d --build
+```
+
+Then open Open WebUI at `http://localhost:3000`.
+
+The compose file sets Open WebUI to call AirLLM through:
+
+* `OPENAI_API_BASE_URL=http://airllm-api:8000/v1`
+* `OPENAI_API_KEY=${AIRLLM_API_KEY}`
+
+### Publish container image to GHCR
+
+Pushing a tag like `v2.12.1` triggers `.github/workflows/publish-ghcr.yml` which builds and publishes:
+
+* `ghcr.io/<your-org-or-user>/airllm-openai:v2.12.1`
+* `ghcr.io/<your-org-or-user>/airllm-openai:latest`
+
+You can also trigger it manually with GitHub Actions `workflow_dispatch`.
  
 
 ## Model Compression - 3x Inference Speed Up!
