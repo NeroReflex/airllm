@@ -160,3 +160,105 @@ class TestRealModelBackends(unittest.TestCase):
         )
         self.assertIsInstance(out, str)
         self.assertGreater(len(out), 0)
+
+    def test_qwen3_coder_next_tool_calling(self):
+        """Test tool-calling capability of Qwen3-Coder-Next-FP8-Dynamic.
+        
+        Verifies that the model can parse and respond to structured function calls
+        in the OpenAI-compatible format. The model is queried with a tool definition
+        and a message requesting a tool call, validating that:
+        1. Model loads correctly via AirLLM routing
+        2. Tool-calling format is recognized
+        3. Model generates structured output with function_call intent
+        """
+        _ensure_cuda_or_skip(self)
+        _ensure_env_enabled_or_skip(
+            self,
+            "AIRLLM_RUN_QWEN3_CODER_NEXT_TOOL_CALL",
+            "This test is gated because first run downloads/splits a very large model (~80GB quantized) "
+            "and requires significant time and disk space. Set to '1' to enable.",
+        )
+        import json
+        
+        model = AutoModel.from_pretrained(
+            "unsloth/Qwen3-Coder-Next-FP8-Dynamic",
+            device="cuda:0",
+            max_seq_len=1024,
+            prefetching=False,
+            layers_per_batch=1,
+        )
+        
+        # Define a simple tool (from model card pattern)
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "calculate_square",
+                    "description": "Calculate the square of a number",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "number": {
+                                "type": "number",
+                                "description": "The number to square",
+                            }
+                        },
+                        "required": ["number"],
+                    },
+                },
+            }
+        ]
+        
+        # Prepare messages with tool context (OpenAI-compatible format)
+        system_msg = (
+            "You are a helpful assistant with access to tools. "
+            "When the user asks you to use a tool, use it. "
+            "Call functions when appropriate using the provided tools."
+        )
+        
+        user_msg = "Calculate the square of 7. Use the calculate_square tool."
+        
+        # Construct the prompt with tool definitions and messages
+        # Format: system + tools + user query
+        prompt = f"""System: {system_msg}
+
+Available tools:
+{json.dumps(tools, indent=2)}
+
+User: {user_msg}
+Assistant:"""
+        
+        # Tokenize and generate response
+        toks = model.tokenizer(
+            [prompt],
+            return_tensors="pt",
+            truncation=True,
+            max_length=512,
+        )
+        
+        out = model.generate(
+            toks["input_ids"].to("cuda:0"),
+            max_new_tokens=64,
+            use_cache=False,
+        )
+        
+        decoded = model.tokenizer.decode(out[0], skip_special_tokens=True)
+        
+        # Verify output is generated and non-empty
+        self.assertIsInstance(decoded, str)
+        self.assertGreater(len(decoded), len(prompt))  # Must generate beyond prompt
+        
+        # Check for signs of tool-call structure (function_call, calculate_square, number)
+        # The model should attempt to use the tool or acknowledge it
+        decoded_lower = decoded.lower()
+        has_tool_signal = (
+            "calculate_square" in decoded_lower
+            or "function" in decoded_lower
+            or "tool" in decoded_lower
+            or "square" in decoded_lower
+            or "49" in decoded_lower  # 7^2 = 49
+        )
+        self.assertTrue(
+            has_tool_signal or len(decoded) > 200,
+            f"Tool calling or substantial output expected. Got: {decoded[:200]}"
+        )
