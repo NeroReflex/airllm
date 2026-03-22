@@ -244,6 +244,23 @@ class TestRealModelBackends(unittest.TestCase):
         self.assertIsInstance(decoded, str)
         self.assertGreater(len(decoded.strip()), 0)
 
+    def test_unsloth_llama33_70b_cuda_smoke(self):
+        _ensure_cuda_or_skip(self)
+        _ensure_env_enabled_or_skip(
+            self,
+            "AIRLLM_RUN_LLAMA33_70B",
+            "This smoke test is intentionally gated because first run can take several minutes "
+            "and requires downloading/splitting a large checkpoint (~70B, ~40GB).",
+        )
+        out = _run_smoke(
+            model_id="unsloth/Llama-3.3-70B-Instruct",
+            device="cuda:0",
+            prompt="Say hello in one short sentence.",
+            max_new_tokens=8,
+        )
+        self.assertIsInstance(out, str)
+        self.assertGreater(len(out), 0)
+
     def test_speecht5_tts_cpu_smoke(self):
         _ensure_env_enabled_or_skip(
             self,

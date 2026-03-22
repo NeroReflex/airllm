@@ -46,6 +46,7 @@ class TestAutoModel(unittest.TestCase):
             ("MllamaForConditionalGeneration", "AirLLMMllama"),
             ("SpeechT5ForTextToSpeech", "AirLLMSpeechT5"),
             ("GptOssForCausalLM", "AirLLMGPTOss"),
+            ("LlamaForCausalLM", "AirLLMLlama2"),
         ]
 
         for arch, expected_cls in cases:
