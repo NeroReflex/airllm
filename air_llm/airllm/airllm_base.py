@@ -3,6 +3,7 @@ from typing import List, Optional, Tuple, Union
 from tqdm import tqdm
 from pathlib import Path
 import time
+import os
 from concurrent.futures import ThreadPoolExecutor
 
 import torch
@@ -104,9 +105,14 @@ class AirLLMBaseModel(GenerationMixin):
         self.hf_quantizer = None
         
         # Rotary embedding cache: avoid recomputing per-layer (optimization)
-        self.enable_rotary_cache = True  # Set to False to bypass optimization
+        # Auto mode enables cache only for larger models where it tends to pay off.
+        self.rotary_cache_auto = True
+        self.rotary_cache_min_layers = int(os.environ.get("AIRLLM_ROTARY_CACHE_MIN_LAYERS", "40"))
+        self.enable_rotary_cache = True  # Can always be manually overridden after init.
         self._cached_pos_embeddings = None
-        self._cached_pos_emb_key = None  # (seq_len, pos_ids_hash) tuple to detect cache invalidation
+        self._cached_pos_emb_seq_len = None
+        self._cached_pos_emb_pos_ptr = None
+        self._cached_pos_emb_pos_numel = None
 
         if compression is not None:
             if not bitsandbytes_installed:
@@ -159,6 +165,9 @@ class AirLLMBaseModel(GenerationMixin):
             model_attr = getattr(model_attr, attr_name)
 
         layers_count = len(model_attr)
+
+        if self.rotary_cache_auto:
+            self.enable_rotary_cache = layers_count >= self.rotary_cache_min_layers
 
 
         self.layer_names = [self.layer_names_dict['embed']] + [f'{self.layer_names_dict["layer_prefix"]}.{i}' for i in
@@ -572,17 +581,26 @@ class AirLLMBaseModel(GenerationMixin):
         if not self.enable_rotary_cache or self._rotary_emb is None:
             return None
         
-        # Create cache key from shape and device
-        cache_key = (seq.shape, pos_ids.shape, str(seq.device))
-        
+        # Hot-path check: avoid tuple/string construction overhead on every layer.
+        seq_len = seq.shape[1]
+        pos_ptr = pos_ids.data_ptr()
+        pos_numel = pos_ids.numel()
+
         # Check if already cached
-        if self._cached_pos_emb_key == cache_key and self._cached_pos_embeddings is not None:
+        if (
+            self._cached_pos_embeddings is not None
+            and self._cached_pos_emb_seq_len == seq_len
+            and self._cached_pos_emb_pos_ptr == pos_ptr
+            and self._cached_pos_emb_pos_numel == pos_numel
+        ):
             return self._cached_pos_embeddings
         
         # Compute and cache new embeddings
         pos_emb = self._rotary_emb(seq, pos_ids)
         self._cached_pos_embeddings = pos_emb
-        self._cached_pos_emb_key = cache_key
+        self._cached_pos_emb_seq_len = seq_len
+        self._cached_pos_emb_pos_ptr = pos_ptr
+        self._cached_pos_emb_pos_numel = pos_numel
         
         return pos_emb
 
@@ -654,7 +672,9 @@ class AirLLMBaseModel(GenerationMixin):
         
         # Clear rotary embedding cache at start of forward pass
         self._cached_pos_embeddings = None
-        self._cached_pos_emb_key = None
+        self._cached_pos_emb_seq_len = None
+        self._cached_pos_emb_pos_ptr = None
+        self._cached_pos_emb_pos_numel = None
 
         kv_cache_list = [] if use_cache else None
         if use_cache:
