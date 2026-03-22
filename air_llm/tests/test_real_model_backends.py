@@ -178,6 +178,23 @@ class TestRealModelBackends(unittest.TestCase):
         self.assertIsInstance(out, str)
         self.assertGreater(len(out), 0)
 
+    def test_unsloth_llama32_11b_vision_text_smoke(self):
+        _ensure_cuda_or_skip(self)
+        _ensure_env_enabled_or_skip(
+            self,
+            "AIRLLM_RUN_LLAMA32_11B_VISION",
+            "This smoke test is intentionally gated because first run can take several minutes "
+            "and requires downloading/splitting a large checkpoint.",
+        )
+        out = _run_smoke(
+            model_id="unsloth/Llama-3.2-11B-Vision-Instruct",
+            device="cuda:0",
+            prompt="Say hello in one short sentence.",
+            max_new_tokens=8,
+        )
+        self.assertIsInstance(out, str)
+        self.assertGreater(len(out), 0)
+
     def test_qwen3_coder_next_tool_calling(self):
         """Test tool-calling capability of Qwen3-Coder-Next-FP8-Dynamic.
         

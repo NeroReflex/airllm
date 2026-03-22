@@ -623,6 +623,9 @@ class AirLLMBaseModel(GenerationMixin):
     def run_norm(self, layer, seq):
         return layer(seq)
 
+    def should_skip_layer(self, layer):
+        return False
+
     def forward(
             self,
             input_ids: torch.LongTensor = None,
@@ -766,6 +769,9 @@ class AirLLMBaseModel(GenerationMixin):
                         elif layer_name == self.layer_names_dict['lm_head']:
                             batch[j] = self.run_lm_head(layer, seq)
                         else:
+                            if self.should_skip_layer(layer):
+                                batch[j] = seq
+                                continue
 
                             if output_attentions:
                                 all_hidden_states[i].append(new_seq)

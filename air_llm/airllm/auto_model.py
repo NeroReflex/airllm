@@ -55,6 +55,8 @@ class AutoModel:
             return "airllm", "AirLLMChatGLM"
         elif "InternLM" in arch:
             return "airllm", "AirLLMInternLM"
+        elif "MllamaForConditionalGeneration" in arch or "MllamaForCausalLM" in arch:
+            return "airllm", "AirLLMMllama"
         elif "Mistral" in arch:
             return "airllm", "AirLLMMistral"
         elif "Mixtral" in arch:
