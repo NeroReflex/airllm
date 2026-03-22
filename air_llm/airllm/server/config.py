@@ -8,6 +8,15 @@ def _as_bool(value: str, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _as_optional_int(value: str | None) -> int | None:
+    if value is None:
+        return None
+    value = value.strip()
+    if value == "":
+        return None
+    return int(value)
+
+
 @dataclass
 class Settings:
     host: str = os.environ.get("AIRLLM_HOST", "0.0.0.0")
@@ -20,7 +29,8 @@ class Settings:
     hf_token: str = os.environ.get("HF_TOKEN", "")
 
     device: str = os.environ.get("AIRLLM_DEVICE", "cuda:0")
-    max_seq_len: int = int(os.environ.get("AIRLLM_MAX_SEQ_LEN", "1024"))
+    # None means auto-infer from model config at load time.
+    max_seq_len: int | None = _as_optional_int(os.environ.get("AIRLLM_MAX_SEQ_LEN"))
     max_new_tokens: int = int(os.environ.get("AIRLLM_MAX_NEW_TOKENS", "256"))
     temperature: float = float(os.environ.get("AIRLLM_TEMPERATURE", "0.2"))
     top_p: float = float(os.environ.get("AIRLLM_TOP_P", "0.95"))

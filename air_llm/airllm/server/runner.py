@@ -8,6 +8,7 @@ import uuid
 from typing import Any
 
 import requests
+from transformers import AutoConfig
 
 from airllm import AutoModel
 
@@ -20,7 +21,54 @@ class ServerRunner:
         self.model = None
         self.tokenizer = None
         self.loaded_model_id = None
+        self.effective_max_seq_len = None
         self.model_lock = threading.Lock()
+
+    def _infer_max_seq_len_from_model(self, model_id: str) -> int:
+        """Infer the largest practical context length from model config."""
+        try:
+            if self.settings.hf_token:
+                config = AutoConfig.from_pretrained(model_id, token=self.settings.hf_token, trust_remote_code=True)
+            else:
+                config = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
+        except Exception:
+            # Fallback keeps behavior predictable even when config cannot be fetched.
+            return 1024
+
+        candidates: list[int] = []
+
+        # Common config keys used by different backends.
+        for key in (
+            "max_position_embeddings",
+            "n_positions",
+            "seq_length",
+            "max_sequence_length",
+            "max_seq_len",
+            "max_seq_length",
+            "context_length",
+            "n_ctx",
+        ):
+            value = getattr(config, key, None)
+            if isinstance(value, int) and value > 0:
+                candidates.append(value)
+
+        # Some backends expose values inside rope_scaling.
+        rope_scaling = getattr(config, "rope_scaling", None)
+        if isinstance(rope_scaling, dict):
+            rope_max = rope_scaling.get("max_position_embeddings")
+            if isinstance(rope_max, int) and rope_max > 0:
+                candidates.append(rope_max)
+
+            original = rope_scaling.get("original_max_position_embeddings")
+            factor = rope_scaling.get("factor")
+            if isinstance(original, int) and original > 0 and isinstance(factor, (int, float)) and factor > 0:
+                candidates.append(int(original * float(factor)))
+
+        # Filter out placeholder infinities seen in some tokenizer/config defaults.
+        sane_candidates = [v for v in candidates if v < 10_000_000]
+        if not sane_candidates:
+            return 1024
+        return max(sane_candidates)
 
     def load_model_if_needed(self, model_id: str | None = None) -> None:
         target_model: str = model_id or self.settings.model_id
@@ -35,16 +83,21 @@ class ServerRunner:
             if layers_per_batch.isdigit():
                 layers_per_batch = int(layers_per_batch)
 
+            max_seq_len = self.settings.max_seq_len
+            if max_seq_len is None:
+                max_seq_len = self._infer_max_seq_len_from_model(target_model)
+
             self.model = AutoModel.from_pretrained(
                 target_model,
                 device=self.settings.device,
-                max_seq_len=self.settings.max_seq_len,
+                max_seq_len=max_seq_len,
                 prefetching=self.settings.prefetching,
                 layers_per_batch=layers_per_batch,
                 hf_token=self.settings.hf_token or None,
             )
             self.tokenizer: Any | None = getattr(self.model, "tokenizer", None)
             self.loaded_model_id: str = target_model
+            self.effective_max_seq_len = max_seq_len
 
     def _flatten_messages_to_prompt(self, messages: list[dict[str, Any]]) -> tuple[str, list[Any]]:
         images: list[Any] = []
@@ -126,7 +179,7 @@ class ServerRunner:
             prompt_tokens = int(inputs["input_ids"].shape[-1])
             completion_tokens: int = max(0, int(output_ids.shape[-1]) - prompt_tokens)
         else:
-            toks = self.tokenizer([prompt], return_tensors="pt", truncation=True, max_length=self.settings.max_seq_len)
+            toks = self.tokenizer([prompt], return_tensors="pt", truncation=True, max_length=self.effective_max_seq_len)
             input_ids = toks["input_ids"].to(self.settings.device)
             kwargs = {
                 "max_new_tokens": max_tokens,
@@ -164,7 +217,7 @@ class ServerRunner:
         top_p: float,
     ) -> dict[str, Any]:
         self.load_model_if_needed(model_id)
-        toks = self.tokenizer([prompt], return_tensors="pt", truncation=True, max_length=self.settings.max_seq_len)
+        toks = self.tokenizer([prompt], return_tensors="pt", truncation=True, max_length=self.effective_max_seq_len)
         input_ids = toks["input_ids"].to(self.settings.device)
 
         kwargs = {

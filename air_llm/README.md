@@ -242,6 +242,10 @@ docker build -t airllm-openai:local .
 docker run --rm -p 8000:8000 \
     -e AIRLLM_MODEL=garage-bAInd/Platypus2-7B \
     -e AIRLLM_DEVICE=cpu \
+    -e AIRLLM_MAX_SEQ_LEN=4096 \
+    -e AIRLLM_MAX_NEW_TOKENS=256 \
+    -e AIRLLM_TEMPERATURE=0.2 \
+    -e AIRLLM_TOP_P=0.95 \
     -e AIRLLM_API_KEY=changeme \
     -e AIRLLM_ENFORCE_AUTH=true \
     airllm-openai:local
@@ -251,9 +255,36 @@ docker run --rm -p 8000:8000 \
 
 ```bash
 AIRLLM_MODEL=garage-bAInd/Platypus2-7B \
+AIRLLM_MAX_NEW_TOKENS=256 \
+AIRLLM_TEMPERATURE=0.2 \
+AIRLLM_TOP_P=0.95 \
 AIRLLM_API_KEY=changeme \
 docker compose -f docker-compose.openwebui.yml up -d --build
 ```
+
+`AIRLLM_MAX_SEQ_LEN` is optional. If unset or empty, AirLLM infers the largest supported context window from the model config.
+
+### Server environment variables
+
+The server reads these environment variables at startup:
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `AIRLLM_MODEL` | `TinyLlama/TinyLlama-1.1B-Chat-v1.0` | Default model id to load when no model is provided in request. |
+| `AIRLLM_DEVICE` | `cuda:0` (image default) / `cpu` (compose default) | Runtime device, for example `cuda:0`, `cpu`, `privateuseone:0`, or `xpu:0` where supported. |
+| `AIRLLM_HOST` | `0.0.0.0` | Server bind host. |
+| `AIRLLM_PORT` | `8000` | Server bind port (inside container). |
+| `AIRLLM_MAX_SEQ_LEN` | unset (auto) | Max prompt context length used by server tokenization and model internals. If empty/unset, it is inferred from model config. |
+| `AIRLLM_MAX_NEW_TOKENS` | `256` | Default generation length when `max_tokens` is not provided by request. |
+| `AIRLLM_TEMPERATURE` | `0.2` | Default sampling temperature. |
+| `AIRLLM_TOP_P` | `0.95` | Default nucleus sampling value. |
+| `AIRLLM_PREFETCHING` | `true` | Enables overlapped layer prefetching for supported backends. |
+| `AIRLLM_LAYERS_PER_BATCH` | `auto` | Number of layers loaded to GPU simultaneously (`auto` or integer). |
+| `AIRLLM_LAZY_LOAD_MODEL` | `true` | If `true`, loads model on first request; if `false`, loads on server startup. |
+| `AIRLLM_API_KEY` | empty | Bearer token expected from clients when auth is enforced. |
+| `AIRLLM_ENFORCE_AUTH` | `false` | Enables/disables auth check for incoming requests. |
+| `HF_TOKEN` | empty | Hugging Face token for gated model downloads. |
+| `AIRLLM_CACHE_DIR` | `~/.cache/huggingface/hub` | Cache directory used for model files and transformed shards. |
 
 Then open Open WebUI at `http://localhost:3000`.
 
