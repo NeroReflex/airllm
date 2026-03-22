@@ -18,7 +18,14 @@ dependencies = [
     "tqdm>=4.65",
     "sentencepiece>=0.2",
     "scipy>=1.11",
+    "fastapi>=0.111",
+    "uvicorn>=0.30",
+    "requests>=2.31",
 ]
+
+[project.scripts]
+airllm = "airllm.server.cli:main"
+airllm-server = "airllm.server.cli:main"
 
 [project.optional-dependencies]
 # 4-bit / 8-bit block-wise quantization (NVIDIA GPU only)

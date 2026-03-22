@@ -36,6 +36,8 @@ class AutoModel:
 
         if "GptOssForCausalLM" in arch:
             return "airllm", "AirLLMGPTOss"
+        elif "DeepseekV3ForCausalLM" in arch:
+            return "airllm", "AirLLMDeepseekV3"
         # Qwen3 MoE variants (check before Qwen2/Qwen to avoid prefix matches)
         elif "Qwen3_5Moe" in arch or "Qwen3MoeForCausalLM" in arch or "Qwen3NextForCausalLM" in arch:
             return "airllm", "AirLLMQwen3Moe"

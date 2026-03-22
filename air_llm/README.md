@@ -2,6 +2,7 @@
 
 [**Quickstart**](#quickstart) | 
 [**Configurations**](#configurations) | 
+[**OpenAI-Compatible Server**](#openai-compatible-server) | 
 [**MacOS**](#macos) | 
 [**Example notebooks**](#example-python-notebook) | 
 [**FAQ**](#faq)
@@ -47,6 +48,7 @@
 * [Quick start](#quickstart)
 * [Model Compression](#model-compression---3x-inference-speed-up)
 * [Configurations](#configurations)
+* [OpenAI-Compatible Server](#openai-compatible-server)
 * [Run on MacOS](#macos)
 * [Example notebooks](#example-python-notebook)
 * [Supported Models](#supported-models)
@@ -105,6 +107,75 @@ print(output)
  
  
 Note: During inference, the original model will first be decomposed and saved layer-wise. Please ensure there is sufficient disk space in the huggingface cache directory.
+
+
+## OpenAI-Compatible Server
+
+AirLLM now includes a built-in OpenAI-compatible server and Ollama-like local model utilities.
+
+### Install runtime dependencies
+
+```bash
+pip install airllm
+```
+
+### CLI commands
+
+```bash
+# Serve API (OpenAI-compatible)
+airllm serve --model meta-llama/Llama-3.1-8B-Instruct --host 0.0.0.0 --port 8000
+
+# Optional auth key (requires Bearer token in requests)
+airllm serve --model meta-llama/Llama-3.1-8B-Instruct --api-key my-secret-key
+
+# Pull model into local Hugging Face cache
+airllm pull meta-llama/Llama-3.1-8B-Instruct
+
+# List local models
+airllm models
+
+# Remove model from local cache
+airllm rm meta-llama/Llama-3.1-8B-Instruct
+```
+
+### OpenAI-style endpoints
+
+When running `airllm serve`, the following endpoints are available:
+
+* `GET /healthz`
+* `GET /v1/models`
+* `POST /v1/chat/completions` (text + image URLs/data URLs)
+* `POST /v1/completions`
+* `POST /v1/audio/speech` (TTS models only)
+* `POST /v1/audio/transcriptions` (currently returns `501 Not Implemented`)
+
+### Ollama-like utility endpoints
+
+* `GET /api/tags`
+* `POST /api/pull`
+* `DELETE /api/delete`
+
+### Example request (chat)
+
+```bash
+curl http://127.0.0.1:8000/v1/chat/completions \
+    -H "Content-Type: application/json" \
+    -d '{
+        "model": "meta-llama/Llama-3.1-8B-Instruct",
+        "messages": [
+            {"role": "user", "content": "Explain AirLLM in one paragraph."}
+        ]
+    }'
+```
+
+### Example request (speech)
+
+```bash
+curl http://127.0.0.1:8000/v1/audio/speech \
+    -H "Content-Type: application/json" \
+    -d '{"model":"microsoft/speecht5_tts","input":"Hello from AirLLM."}' \
+    --output out.wav
+```
  
 
 ## Model Compression - 3x Inference Speed Up!
