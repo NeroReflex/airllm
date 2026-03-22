@@ -40,3 +40,13 @@ class Settings:
 
     lazy_load_model: bool = _as_bool(os.environ.get("AIRLLM_LAZY_LOAD_MODEL"), True)
     cache_dir: str = os.environ.get("AIRLLM_CACHE_DIR", os.path.expanduser("~/.cache/huggingface/hub"))
+
+    # Jinja2 chat-template control.  Equivalent to vLLM's --chat-template /
+    # llama.cpp's --jinja flag.  Options:
+    #   • empty or "auto" (default) — use the model's built-in chat_template
+    #     from tokenizer_config.json; fall back to naive formatting if absent.
+    #   • path to a .jinja file — load and use that template, overriding the
+    #     model's built-in template.
+    #   • "none" — disable templating; always use legacy "ROLE: content"
+    #     formatting regardless of what the tokenizer provides.
+    chat_template: str = os.environ.get("AIRLLM_CHAT_TEMPLATE", "")

@@ -1,4 +1,4 @@
-from typing import Literal, Optional, Union
+from typing import Any, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -16,7 +16,10 @@ class ChatContentPart(BaseModel):
 
 class ChatMessage(BaseModel):
     role: Literal["system", "user", "assistant", "tool"]
-    content: Union[str, list[ChatContentPart]]
+    # content may be None for tool-result messages or structured assistant turns
+    content: Optional[Union[str, list[ChatContentPart]]] = None
+    name: Optional[str] = None
+    tool_call_id: Optional[str] = None
 
 
 class ChatCompletionRequest(BaseModel):
@@ -26,6 +29,13 @@ class ChatCompletionRequest(BaseModel):
     temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0)
     top_p: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     stream: bool = False
+    # Tool / function-calling fields (passed through to apply_chat_template for
+    # models whose Jinja2 template supports them, e.g. Llama 3.1+, Qwen 2.5+).
+    tools: Optional[list[dict[str, Any]]] = None
+    tool_choice: Optional[Union[str, dict[str, Any]]] = None
+    # Generation controls forwarded by most OpenAI-compatible clients.
+    stop: Optional[Union[str, list[str]]] = None
+    seed: Optional[int] = None
 
 
 class CompletionRequest(BaseModel):

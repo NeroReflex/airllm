@@ -168,3 +168,192 @@ class TestInferMaxSeqLen(unittest.TestCase):
             mock_infer.assert_not_called()
 
         self.assertEqual(runner.effective_max_seq_len, 512)
+
+
+def _runner_with_tokenizer(chat_template_setting="", tokenizer=None):
+    """Build a pre-loaded ServerRunner with a stub tokenizer."""
+    settings = Settings()
+    settings.chat_template = chat_template_setting
+    runner = ServerRunner(settings)
+    runner.tokenizer = tokenizer or MagicMock()
+    runner.model = MagicMock()
+    runner.loaded_model_id = "stub-model"
+    runner.effective_max_seq_len = 1024
+    return runner
+
+
+MESSAGES = [
+    {"role": "user", "content": "Hello, world!"},
+]
+
+MULTI_MESSAGES = [
+    {"role": "system", "content": "You are helpful."},
+    {"role": "user", "content": "What is the weather?"},
+]
+
+
+class TestApplyChatTemplate(unittest.TestCase):
+    """Unit tests for ServerRunner._apply_chat_template."""
+
+    # ------------------------------------------------------------------
+    # Built-in tokenizer template (default / auto)
+    # ------------------------------------------------------------------
+
+    def test_uses_tokenizer_apply_chat_template(self):
+        tok = MagicMock()
+        tok.apply_chat_template.return_value = "<|user|>Hello, world!</s>"
+        runner = _runner_with_tokenizer(chat_template_setting="", tokenizer=tok)
+
+        prompt, used = runner._apply_chat_template(MESSAGES)
+
+        self.assertTrue(used)
+        self.assertEqual(prompt, "<|user|>Hello, world!</s>")
+        tok.apply_chat_template.assert_called_once_with(
+            MESSAGES, tokenize=False, add_generation_prompt=True
+        )
+
+    def test_tools_forwarded_to_apply_chat_template(self):
+        tok = MagicMock()
+        tok.apply_chat_template.return_value = "<tool_call>..."
+        tools = [{"type": "function", "function": {"name": "get_weather"}}]
+        runner = _runner_with_tokenizer(tokenizer=tok)
+
+        prompt, used = runner._apply_chat_template(MESSAGES, tools=tools)
+
+        self.assertTrue(used)
+        tok.apply_chat_template.assert_called_once_with(
+            MESSAGES, tokenize=False, add_generation_prompt=True, tools=tools
+        )
+
+    def test_fallback_to_naive_when_tokenizer_raises(self):
+        tok = MagicMock()
+        tok.apply_chat_template.side_effect = Exception("no template")
+        runner = _runner_with_tokenizer(tokenizer=tok)
+
+        prompt, used = runner._apply_chat_template(MESSAGES)
+
+        self.assertFalse(used)
+        self.assertIn("USER:", prompt)
+        self.assertIn("ASSISTANT:", prompt)
+
+    def test_fallback_to_naive_when_tokenizer_is_none(self):
+        runner = _runner_with_tokenizer()
+        runner.tokenizer = None  # tokenizer unavailable
+
+        prompt, used = runner._apply_chat_template(MESSAGES)
+
+        self.assertFalse(used)
+        self.assertIn("USER:", prompt)
+
+    # ------------------------------------------------------------------
+    # Explicit opt-out
+    # ------------------------------------------------------------------
+
+    def test_none_setting_skips_template(self):
+        tok = MagicMock()
+        runner = _runner_with_tokenizer(chat_template_setting="none", tokenizer=tok)
+
+        prompt, used = runner._apply_chat_template(MESSAGES)
+
+        self.assertFalse(used)
+        tok.apply_chat_template.assert_not_called()
+        self.assertIn("USER:", prompt)
+
+    def test_false_setting_skips_template(self):
+        runner = _runner_with_tokenizer(chat_template_setting="false")
+        _, used = runner._apply_chat_template(MESSAGES)
+        self.assertFalse(used)
+
+    def test_off_setting_skips_template(self):
+        runner = _runner_with_tokenizer(chat_template_setting="OFF")
+        _, used = runner._apply_chat_template(MESSAGES)
+        self.assertFalse(used)
+
+    # ------------------------------------------------------------------
+    # Custom template file
+    # ------------------------------------------------------------------
+
+    def test_custom_template_file_is_loaded_and_passed(self):
+        tok = MagicMock()
+        tok.apply_chat_template.return_value = "<custom>Hello</custom>"
+        template_content = "{% for m in messages %}{{ m.content }}{% endfor %}"
+
+        with patch("builtins.open", unittest.mock.mock_open(read_data=template_content)):
+            runner = _runner_with_tokenizer(
+                chat_template_setting="/some/path.jinja", tokenizer=tok
+            )
+            prompt, used = runner._apply_chat_template(MESSAGES)
+
+        self.assertTrue(used)
+        call_kwargs = tok.apply_chat_template.call_args.kwargs
+        self.assertEqual(call_kwargs["chat_template"], template_content)
+
+    def test_custom_template_file_not_found_raises(self):
+        runner = _runner_with_tokenizer(chat_template_setting="/nonexistent/template.jinja")
+
+        with self.assertRaises(ValueError, msg="Should raise ValueError for missing file"):
+            runner._apply_chat_template(MESSAGES)
+
+    # ------------------------------------------------------------------
+    # _flatten_messages_to_prompt integration
+    # ------------------------------------------------------------------
+
+    def test_flatten_returns_three_tuple(self):
+        tok = MagicMock()
+        tok.apply_chat_template.return_value = "templated"
+        runner = _runner_with_tokenizer(tokenizer=tok)
+
+        result = runner._flatten_messages_to_prompt(MESSAGES)
+
+        self.assertEqual(len(result), 3)
+        prompt, images, used = result
+        self.assertIsInstance(prompt, str)
+        self.assertIsInstance(images, list)
+        self.assertIsInstance(used, bool)
+
+    def test_flatten_extracts_text_from_list_content(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe this:"},
+                ],
+            }
+        ]
+        runner = _runner_with_tokenizer(chat_template_setting="none")
+
+        prompt, images, used = runner._flatten_messages_to_prompt(messages)
+
+        self.assertFalse(used)
+        self.assertEqual(images, [])
+        self.assertIn("Describe this:", prompt)
+
+
+class TestNaiveFormat(unittest.TestCase):
+    """Unit tests for ServerRunner._naive_format."""
+
+    def _naive(self, messages, chat_template_setting="none"):
+        runner = _runner_with_tokenizer(chat_template_setting=chat_template_setting)
+        return runner._naive_format(messages)
+
+    def test_single_user_message(self):
+        prompt = self._naive([{"role": "user", "content": "Hello"}])
+        self.assertEqual(prompt, "USER: Hello\nASSISTANT:")
+
+    def test_system_and_user(self):
+        prompt = self._naive(MULTI_MESSAGES)
+        self.assertIn("SYSTEM: You are helpful.", prompt)
+        self.assertIn("USER: What is the weather?", prompt)
+        self.assertTrue(prompt.endswith("ASSISTANT:"))
+
+    def test_none_content_treated_as_empty(self):
+        prompt = self._naive([{"role": "user", "content": None}])
+        self.assertEqual(prompt, "USER: \nASSISTANT:")
+
+    def test_missing_role_defaults_to_user(self):
+        prompt = self._naive([{"content": "hi"}])
+        self.assertIn("USER:", prompt)
+
+    def test_empty_messages_list(self):
+        prompt = self._naive([])
+        self.assertEqual(prompt, "ASSISTANT:")

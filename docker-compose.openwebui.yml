@@ -20,6 +20,7 @@ services:
       AIRLLM_API_KEY: ${AIRLLM_API_KEY:-changeme}
       AIRLLM_ENFORCE_AUTH: ${AIRLLM_ENFORCE_AUTH:-true}
       HF_TOKEN: ${HF_TOKEN:-}
+      AIRLLM_CHAT_TEMPLATE: ${AIRLLM_CHAT_TEMPLATE:-}
     ports:
       - "${AIRLLM_API_PORT:-8000}:8000"
     volumes:

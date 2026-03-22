@@ -278,6 +278,7 @@ The server reads these environment variables at startup:
 | `AIRLLM_MAX_NEW_TOKENS` | `256` | Default generation length when `max_tokens` is not provided by request. |
 | `AIRLLM_TEMPERATURE` | `0.2` | Default sampling temperature. |
 | `AIRLLM_TOP_P` | `0.95` | Default nucleus sampling value. |
+| `AIRLLM_CHAT_TEMPLATE` | empty (auto) | Jinja2 chat-template control. Empty/`auto` = use the model's built-in tokenizer template (equivalent to vLLM `--chat-template` / llama.cpp `--jinja`). Set to a `.jinja` file path to load a custom template. Set to `none` to disable templating and fall back to legacy `ROLE: content` formatting. |
 | `AIRLLM_PREFETCHING` | `true` | Enables overlapped layer prefetching for supported backends. |
 | `AIRLLM_LAYERS_PER_BATCH` | `auto` | Number of layers loaded to GPU simultaneously (`auto` or integer). |
 | `AIRLLM_LAZY_LOAD_MODEL` | `true` | If `true`, loads model on first request; if `false`, loads on server startup. |

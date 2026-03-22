@@ -16,6 +16,17 @@ def _build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--host", default=None, help="Bind host")
     serve.add_argument("--port", type=int, default=None, help="Bind port")
     serve.add_argument("--api-key", default=None, help="Bearer token required for auth")
+    serve.add_argument(
+        "--chat-template",
+        default=None,
+        metavar="PATH_OR_MODE",
+        help=(
+            "Jinja2 chat-template control (same as vLLM --chat-template / "
+            "llama.cpp --jinja). Accepted values: a path to a .jinja file; "
+            "'none' to disable templating and use legacy ROLE: content format; "
+            "empty / omitted to use the model's built-in tokenizer template."
+        ),
+    )
 
     pull: argparse.ArgumentParser = sub.add_parser("pull", help="Download a model to local cache")
     pull.add_argument("model", help="Model id to pull (e.g. meta-llama/Llama-3.1-8B-Instruct)")
@@ -40,6 +51,8 @@ def _settings_with_overrides(args: argparse.Namespace) -> Settings:
     if getattr(args, "api_key", None):
         settings.api_key = args.api_key
         settings.enforce_auth = True
+    if getattr(args, "chat_template", None) is not None:
+        settings.chat_template = args.chat_template
     return settings
 
 

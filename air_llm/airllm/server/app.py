@@ -103,6 +103,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             temperature=req.temperature if req.temperature is not None else settings.temperature,
             top_p=req.top_p if req.top_p is not None else settings.top_p,
             max_tokens=req.max_tokens if req.max_tokens is not None else settings.max_new_tokens,
+            tools=req.tools or None,
         )
 
         body = {
