@@ -711,11 +711,20 @@ class AirLLMBaseModel(GenerationMixin):
                 end = min(start + layers_per_batch, total_layers)
                 batch_ranges.append((start, end))
 
-            # Prefetch first batch to CPU
-            if self.prefetching and len(batch_ranges) > 0:
+            # Prepass: always load first batch to CPU before entering the loop.
+            # This makes startup behavior consistent across all layer-streamed backends.
+            first_batch_state_dicts = None
+            future = None
+            if len(batch_ranges) > 0:
                 first_start, first_end = batch_ranges[0]
                 first_names = self.layer_names[first_start:first_end]
-                future = executor.submit(self._load_batch_to_cpu, first_names)
+                first_batch_state_dicts = self._load_batch_to_cpu(first_names)
+
+                # Async prefetch remains optional for subsequent batches.
+                if self.prefetching and len(batch_ranges) > 1:
+                    next_start, next_end = batch_ranges[1]
+                    next_names = self.layer_names[next_start:next_end]
+                    future = executor.submit(self._load_batch_to_cpu, next_names)
 
             pbar = tqdm(total=total_layers, desc=f'running layers({self.running_device})')
 
@@ -724,7 +733,9 @@ class AirLLMBaseModel(GenerationMixin):
                 batch_names = self.layer_names[b_start:b_end]
 
                 # === Phase 1: Load batch to CPU ===
-                if self.prefetching:
+                if b_idx == 0:
+                    batch_state_dicts = first_batch_state_dicts
+                elif self.prefetching:
                     if self.profiling_mode:
                         t = time.time()
                     batch_state_dicts = future.result()
