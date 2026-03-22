@@ -1,29 +1,47 @@
+from __future__ import annotations
+
+from importlib import import_module
 from sys import platform
+from typing import Any
 
-is_on_mac_os = False
-
-if platform == "darwin":
-    is_on_mac_os = True
+is_on_mac_os = platform == "darwin"
 
 if is_on_mac_os:
-    from .airllm_llama_mlx import AirLLMLlamaMlx
-    from .auto_model import AutoModel
+    _EXPORTS = {
+        "AirLLMLlamaMlx": (".airllm_llama_mlx", "AirLLMLlamaMlx"),
+        "AutoModel": (".auto_model", "AutoModel"),
+    }
 else:
-    from .airllm import AirLLMLlama2
-    from .airllm_chatglm import AirLLMChatGLM
-    from .airllm_glm4 import AirLLMGLM4
-    from .airllm_gpt_oss import AirLLMGPTOss
-    from .airllm_deepseek_v3 import AirLLMDeepseekV3
-    from .airllm_qwen import AirLLMQWen
-    from .airllm_qwen2 import AirLLMQWen2
-    from .airllm_qwen3_moe import AirLLMQwen3Moe, AirLLMQwen3
-    from .airllm_mllama import AirLLMMllama
-    from .airllm_speecht5 import AirLLMSpeechT5
-    from .airllm_baichuan import AirLLMBaichuan
-    from .airllm_internlm import AirLLMInternLM
-    from .airllm_mistral import AirLLMMistral
-    from .airllm_mixtral import AirLLMMixtral
-    from .airllm_base import AirLLMBaseModel
-    from .auto_model import AutoModel
-    from .utils import split_and_save_layers
-    from .utils import NotEnoughSpaceException
+    _EXPORTS = {
+        "AirLLMLlama2": (".airllm", "AirLLMLlama2"),
+        "AirLLMChatGLM": (".airllm_chatglm", "AirLLMChatGLM"),
+        "AirLLMGLM4": (".airllm_glm4", "AirLLMGLM4"),
+        "AirLLMGPTOss": (".airllm_gpt_oss", "AirLLMGPTOss"),
+        "AirLLMDeepseekV3": (".airllm_deepseek_v3", "AirLLMDeepseekV3"),
+        "AirLLMQWen": (".airllm_qwen", "AirLLMQWen"),
+        "AirLLMQWen2": (".airllm_qwen2", "AirLLMQWen2"),
+        "AirLLMQwen3Moe": (".airllm_qwen3_moe", "AirLLMQwen3Moe"),
+        "AirLLMQwen3": (".airllm_qwen3_moe", "AirLLMQwen3"),
+        "AirLLMMllama": (".airllm_mllama", "AirLLMMllama"),
+        "AirLLMSpeechT5": (".airllm_speecht5", "AirLLMSpeechT5"),
+        "AirLLMBaichuan": (".airllm_baichuan", "AirLLMBaichuan"),
+        "AirLLMInternLM": (".airllm_internlm", "AirLLMInternLM"),
+        "AirLLMMistral": (".airllm_mistral", "AirLLMMistral"),
+        "AirLLMMixtral": (".airllm_mixtral", "AirLLMMixtral"),
+        "AirLLMBaseModel": (".airllm_base", "AirLLMBaseModel"),
+        "AutoModel": (".auto_model", "AutoModel"),
+        "split_and_save_layers": (".utils", "split_and_save_layers"),
+        "NotEnoughSpaceException": (".utils", "NotEnoughSpaceException"),
+    }
+
+__all__ = ["is_on_mac_os", *_EXPORTS.keys()]
+
+
+def __getattr__(name: str) -> Any:
+    if name not in _EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+    module_name, attr_name = _EXPORTS[name]
+    value = getattr(import_module(module_name, __name__), attr_name)
+    globals()[name] = value
+    return value

@@ -1,4 +1,5 @@
 import json
+from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
 from typing import Any
 
@@ -25,10 +26,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     runner = ServerRunner(settings)
     store = ModelStore(settings.cache_dir, hf_token=settings.hf_token)
 
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
+        if not settings.lazy_load_model:
+            runner.load_model_if_needed(settings.model_id)
+        yield
+
     app = FastAPI(
         title="AirLLM OpenAI-Compatible API",
         version="0.1.0",
         description="OpenAI-compatible API server embedded in AirLLM",
+        lifespan=lifespan,
     )
 
     def check_auth(authorization: str | None = Header(default=None)) -> None:
@@ -41,11 +49,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         token: str = authorization.replace("Bearer ", "", 1).strip()
         if token != settings.api_key:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
-
-    @app.on_event("startup")
-    async def startup_event() -> None:
-        if not settings.lazy_load_model:
-            runner.load_model_if_needed(settings.model_id)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:

@@ -23,10 +23,13 @@ import os
 from shutil import copyfile
 from typing import Any, Dict, List, Optional, Tuple
 
-import sentencepiece as spm
+from ._sentencepiece_compat import import_sentencepiece_module
 
 from transformers.tokenization_utils import AddedToken, PreTrainedTokenizer
 from transformers.utils import logging
+
+
+spm = import_sentencepiece_module()
 
 
 logger = logging.get_logger(__name__)

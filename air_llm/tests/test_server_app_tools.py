@@ -30,6 +30,18 @@ class TestChatCompletionsToolSupport(unittest.TestCase):
         self.store_patcher.stop()
         self.runner_patcher.stop()
 
+    def test_startup_loads_model_when_lazy_loading_disabled(self):
+        settings = Settings()
+        settings.enforce_auth = False
+        settings.lazy_load_model = False
+        settings.model_id = "MiniMaxAI/MiniMax-M2.5"
+
+        with TestClient(app_module.create_app(settings)) as client:
+            response = client.get("/healthz")
+
+        self.assertEqual(response.status_code, 200)
+        self.runner.load_model_if_needed.assert_called_with("MiniMaxAI/MiniMax-M2.5")
+
     def test_non_stream_returns_tool_calls_and_finish_reason(self):
         self.runner.generate_chat.return_value = {
             "id": "chatcmpl-test",

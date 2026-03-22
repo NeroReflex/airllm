@@ -10,10 +10,12 @@ from typing import Optional, Tuple
 
 import mlx.core as mx
 import mlx.nn as nn
-from sentencepiece import SentencePieceProcessor
+from ._sentencepiece_compat import import_sentencepiece_processor
 from .persist import ModelPersister
 import psutil
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, AutoModel, GenerationMixin, LlamaForCausalLM, GenerationConfig
+SentencePieceProcessor = import_sentencepiece_processor()
+
 from .utils import clean_memory, load_layer, \
     find_or_create_local_splitted_path
 
