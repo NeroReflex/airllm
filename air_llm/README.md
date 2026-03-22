@@ -262,6 +262,11 @@ The compose file sets Open WebUI to call AirLLM through:
 * `OPENAI_API_BASE_URL=http://airllm-api:8000/v1`
 * `OPENAI_API_KEY=${AIRLLM_API_KEY}`
 
+Optional host port overrides:
+
+* `AIRLLM_API_PORT` (default `8000`)
+* `OPEN_WEBUI_PORT` (default `3000`)
+
 ### Publish container image to GHCR
 
 Pushing a tag like `v2.12.1` triggers `.github/workflows/publish-ghcr.yml` which builds and publishes:
