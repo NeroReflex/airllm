@@ -1,4 +1,7 @@
 import importlib
+from typing import Any
+from typing import Type
+
 from transformers import AutoConfig
 from sys import platform
 
@@ -12,14 +15,19 @@ if is_on_mac_os:
 
 
 class AutoModel:
-    def __init__(self):
+    def __init__(self) -> None:
         raise EnvironmentError(
             "AutoModel is designed to be instantiated "
             "using the `AutoModel.from_pretrained(pretrained_model_name_or_path)` method."
         )
 
     @classmethod
-    def get_module_class(cls, pretrained_model_name_or_path, *inputs, **kwargs):
+    def get_module_class(
+        cls,
+        pretrained_model_name_or_path: str,
+        *inputs: Any,
+        **kwargs: Any,
+    ) -> tuple[str, str]:
         if "hf_token" in kwargs:
             print(f"using hf_token")
             config = AutoConfig.from_pretrained(
@@ -74,13 +82,18 @@ class AutoModel:
             return "airllm", "AirLLMLlama2"
 
     @classmethod
-    def from_pretrained(cls, pretrained_model_name_or_path, *inputs, **kwargs):
+    def from_pretrained(
+        cls,
+        pretrained_model_name_or_path: str,
+        *inputs: Any,
+        **kwargs: Any,
+    ) -> Any:
         if is_on_mac_os:
             return AirLLMLlamaMlx(pretrained_model_name_or_path, *inputs, **kwargs)
 
-        module, cls = AutoModel.get_module_class(
+        module, class_name = AutoModel.get_module_class(
             pretrained_model_name_or_path, *inputs, **kwargs
         )
         module = importlib.import_module(module)
-        class_ = getattr(module, cls)
+        class_: Type[Any] = getattr(module, class_name)
         return class_(pretrained_model_name_or_path, *inputs, **kwargs)

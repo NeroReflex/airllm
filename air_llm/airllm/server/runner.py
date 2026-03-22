@@ -15,15 +15,15 @@ from .config import Settings
 
 
 class ServerRunner:
-    def __init__(self, settings: Settings):
-        self.settings = settings
+    def __init__(self, settings: Settings) -> None:
+        self.settings: Settings = settings
         self.model = None
         self.tokenizer = None
         self.loaded_model_id = None
         self.model_lock = threading.Lock()
 
-    def load_model_if_needed(self, model_id: str | None = None):
-        target_model = model_id or self.settings.model_id
+    def load_model_if_needed(self, model_id: str | None = None) -> None:
+        target_model: str = model_id or self.settings.model_id
         if self.model is not None and self.loaded_model_id == target_model:
             return
 
@@ -43,8 +43,8 @@ class ServerRunner:
                 layers_per_batch=layers_per_batch,
                 hf_token=self.settings.hf_token or None,
             )
-            self.tokenizer = getattr(self.model, "tokenizer", None)
-            self.loaded_model_id = target_model
+            self.tokenizer: Any | None = getattr(self.model, "tokenizer", None)
+            self.loaded_model_id: str = target_model
 
     def _flatten_messages_to_prompt(self, messages: list[dict[str, Any]]) -> tuple[str, list[Image.Image]]:
         images: list[Image.Image] = []
@@ -63,7 +63,7 @@ class ServerRunner:
                     if part.get("type") == "text":
                         text_chunks.append(part.get("text", ""))
                     elif part.get("type") == "image_url":
-                        img = self._load_image_from_url(part.get("image_url", {}).get("url", ""))
+                        img: Image.Image | None = self._load_image_from_url(part.get("image_url", {}).get("url", ""))
                         if img is not None:
                             images.append(img)
                             text_chunks.append("<|image|>")
@@ -77,20 +77,27 @@ class ServerRunner:
             return None
         if url.startswith("data:image"):
             try:
-                b64 = url.split(",", 1)[1]
-                raw = base64.b64decode(b64)
+                b64: str = url.split(",", 1)[1]
+                raw: bytes = base64.b64decode(b64)
                 return Image.open(io.BytesIO(raw)).convert("RGB")
             except Exception:
                 return None
 
         try:
-            r = requests.get(url, timeout=20)
+            r: requests.Response = requests.get(url, timeout=20)
             r.raise_for_status()
             return Image.open(io.BytesIO(r.content)).convert("RGB")
         except Exception:
             return None
 
-    def generate_chat(self, messages: list[dict[str, Any]], model_id: str | None, max_tokens: int, temperature: float, top_p: float):
+    def generate_chat(
+        self,
+        messages: list[dict[str, Any]],
+        model_id: str | None,
+        max_tokens: int,
+        temperature: float,
+        top_p: float,
+    ) -> dict[str, Any]:
         self.load_model_if_needed(model_id)
         prompt, images = self._flatten_messages_to_prompt(messages)
 
@@ -112,7 +119,7 @@ class ServerRunner:
             text = processor.batch_decode(output_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
             completion = text[len(prompt) :].strip() if text.startswith(prompt) else text.strip()
             prompt_tokens = int(inputs["input_ids"].shape[-1])
-            completion_tokens = max(0, int(output_ids.shape[-1]) - prompt_tokens)
+            completion_tokens: int = max(0, int(output_ids.shape[-1]) - prompt_tokens)
         else:
             toks = self.tokenizer([prompt], return_tensors="pt", truncation=True, max_length=self.settings.max_seq_len)
             input_ids = toks["input_ids"].to(self.settings.device)
@@ -128,7 +135,7 @@ class ServerRunner:
             text = self.tokenizer.decode(output_ids[0], skip_special_tokens=True)
             completion = text[len(prompt) :].strip() if text.startswith(prompt) else text.strip()
             prompt_tokens = int(input_ids.shape[-1])
-            completion_tokens = max(0, int(output_ids.shape[-1]) - prompt_tokens)
+            completion_tokens: int = max(0, int(output_ids.shape[-1]) - prompt_tokens)
 
         return {
             "id": f"chatcmpl-{uuid.uuid4().hex}",
@@ -143,7 +150,14 @@ class ServerRunner:
             },
         }
 
-    def generate_completion(self, prompt: str, model_id: str | None, max_tokens: int, temperature: float, top_p: float):
+    def generate_completion(
+        self,
+        prompt: str,
+        model_id: str | None,
+        max_tokens: int,
+        temperature: float,
+        top_p: float,
+    ) -> dict[str, Any]:
         self.load_model_if_needed(model_id)
         toks = self.tokenizer([prompt], return_tensors="pt", truncation=True, max_length=self.settings.max_seq_len)
         input_ids = toks["input_ids"].to(self.settings.device)
@@ -162,7 +176,7 @@ class ServerRunner:
         completion = text[len(prompt) :].strip() if text.startswith(prompt) else text.strip()
 
         prompt_tokens = int(input_ids.shape[-1])
-        completion_tokens = max(0, int(output_ids.shape[-1]) - prompt_tokens)
+        completion_tokens: int = max(0, int(output_ids.shape[-1]) - prompt_tokens)
 
         return {
             "id": f"cmpl-{uuid.uuid4().hex}",
