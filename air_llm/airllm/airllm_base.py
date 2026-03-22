@@ -623,7 +623,7 @@ class AirLLMBaseModel(GenerationMixin):
     def run_norm(self, layer, seq):
         return layer(seq)
 
-    def should_skip_layer(self, layer):
+    def should_skip_layer(self, layer, **kwargs):
         return False
 
     def forward(
@@ -638,6 +638,12 @@ class AirLLMBaseModel(GenerationMixin):
             output_attentions: Optional[bool] = None,
             output_hidden_states: Optional[bool] = None,
             return_dict: Optional[bool] = None,
+                pixel_values: Optional[torch.Tensor] = None,
+                aspect_ratio_mask: Optional[torch.Tensor] = None,
+                aspect_ratio_ids: Optional[torch.Tensor] = None,
+                cross_attention_mask: Optional[torch.Tensor] = None,
+                cross_attention_states: Optional[torch.Tensor] = None,
+                full_text_row_masked_out_mask: Optional[torch.Tensor] = None,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
 
         if cache_utils_installed:
@@ -769,7 +775,10 @@ class AirLLMBaseModel(GenerationMixin):
                         elif layer_name == self.layer_names_dict['lm_head']:
                             batch[j] = self.run_lm_head(layer, seq)
                         else:
-                            if self.should_skip_layer(layer):
+                            if self.should_skip_layer(
+                                layer,
+                                cross_attention_states=cross_attention_states,
+                            ):
                                 batch[j] = seq
                                 continue
 
@@ -788,6 +797,13 @@ class AirLLMBaseModel(GenerationMixin):
 
                                 kwargs = {'use_cache':True,
                                           }
+
+                                if cross_attention_states is not None:
+                                    kwargs['cross_attention_states'] = cross_attention_states
+                                if cross_attention_mask is not None:
+                                    kwargs['cross_attention_mask'] = cross_attention_mask
+                                if full_text_row_masked_out_mask is not None:
+                                    kwargs['full_text_row_masked_out_mask'] = full_text_row_masked_out_mask
 
                                 pos_embed_args = self.get_pos_emb_args(len_p, len_s)
                                 kwargs = {**kwargs, **past_key_value_args, **pos_embed_args, **attention_mask_args,
@@ -828,6 +844,14 @@ class AirLLMBaseModel(GenerationMixin):
                                     kwargs = {'use_cache': False,
                                               'attention_mask': attention_mask[:, :, -len_seq:, -len_seq:],
                                               }
+
+                                    if cross_attention_states is not None:
+                                        kwargs['cross_attention_states'] = cross_attention_states
+                                    if cross_attention_mask is not None:
+                                        kwargs['cross_attention_mask'] = cross_attention_mask
+                                    if full_text_row_masked_out_mask is not None:
+                                        kwargs['full_text_row_masked_out_mask'] = full_text_row_masked_out_mask
+
                                     kwargs = {**kwargs, **pos_embed_args, **attention_mask_args, **position_ids_args}
                                     if self._rotary_emb is not None:
                                         pos_ids = position_ids_args.get('position_ids', position_ids[:, :len_seq])
@@ -841,6 +865,14 @@ class AirLLMBaseModel(GenerationMixin):
                                     kwargs = {'use_cache': True,
                                               'attention_mask': attention_mask[:, :, -len_seq:, -len_seq:],
                                               }
+
+                                    if cross_attention_states is not None:
+                                        kwargs['cross_attention_states'] = cross_attention_states
+                                    if cross_attention_mask is not None:
+                                        kwargs['cross_attention_mask'] = cross_attention_mask
+                                    if full_text_row_masked_out_mask is not None:
+                                        kwargs['full_text_row_masked_out_mask'] = full_text_row_masked_out_mask
+
                                     kwargs = {**kwargs, **pos_embed_args, **attention_mask_args, **position_ids_args}
                                     if self._rotary_emb is not None:
                                         pos_ids = position_ids_args.get('position_ids', position_ids[:, :len_seq])

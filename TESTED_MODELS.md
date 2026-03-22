@@ -15,7 +15,8 @@ This file records models and backends that have been exercised in this workspace
 | `unsloth/gpt-oss-120b` | CUDA | Passed | End-to-end run completed successfully; first run took about 27 minutes due to download/splitting |
 | `Jackrong/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled` | CUDA | Passed | End-to-end run succeeded in about 194s after adding `Qwen3_5ForConditionalGeneration` routing, nested `model.language_model.*` support, and robust shard-prefix parsing |
 | `unsloth/phi-4` | CUDA | Passed | End-to-end run completed successfully; first run took about 1033s due to download/splitting, then inference completed through `AirLLMLlama2` |
-| `unsloth/Llama-3.2-11B-Vision-Instruct` | CUDA | Passed | Text-only smoke test passed through `AirLLMMllama`; first run required download/splitting of the language-model weights |
+| `unsloth/Llama-3.2-11B-Vision-Instruct` | CUDA | Passed | Text smoke test passed through `AirLLMMllama`; first run required download/splitting of language-model weights |
+| `unsloth/Llama-3.2-11B-Vision-Instruct` | CUDA | Passed | Image-conditioned smoke test passed through `AirLLMMllama` (cross-attention states prepared from vision encoder) |
 
 ## Backend / Device Validation
 
@@ -35,6 +36,7 @@ This file records models and backends that have been exercised in this workspace
 | Qwen3.5-27B smoke | `AIRLLM_RUN_QWEN35_27B=1` | Intentionally gated because first run may need to download/split a large checkpoint |
 | Phi-4 smoke | `AIRLLM_RUN_PHI4=1` | Intentionally gated because first run may need to download/split a large checkpoint |
 | Llama 3.2 Vision text smoke | `AIRLLM_RUN_LLAMA32_11B_VISION=1` | Intentionally gated because first run may need to download/split a large checkpoint |
+| Llama 3.2 Vision image smoke | `AIRLLM_RUN_LLAMA32_11B_VISION_IMAGE=1` | Intentionally gated because first run may need to download/split a large checkpoint |
 
 ## Notes
 
@@ -46,7 +48,7 @@ This file records models and backends that have been exercised in this workspace
   - `Qwen3_5MoeForConditionalGeneration`
 - Real backend smoke tests live in `air_llm/tests/test_real_model_backends.py`.
 - `unsloth/phi-4` currently resolves through the Llama path (`LlamaForCausalLM` -> `AirLLMLlama2`) and passed an end-to-end CUDA smoke run.
-- `unsloth/Llama-3.2-11B-Vision-Instruct` now routes through `MllamaForConditionalGeneration` -> `AirLLMMllama` and is validated for text-only execution. Image-conditioned inference is not yet implemented in AirLLM.
+- `unsloth/Llama-3.2-11B-Vision-Instruct` now routes through `MllamaForConditionalGeneration` -> `AirLLMMllama` and is validated for both text-only and image-conditioned execution.
 - Compatibility fixes verified for `Jackrong/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled`:
   - `Qwen3_5ForConditionalGeneration` now routes to `AirLLMQwen3`
   - dense Qwen3.5 wrapper layout uses `model.language_model.*`

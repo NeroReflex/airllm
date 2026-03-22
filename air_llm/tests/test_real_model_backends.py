@@ -195,6 +195,55 @@ class TestRealModelBackends(unittest.TestCase):
         self.assertIsInstance(out, str)
         self.assertGreater(len(out), 0)
 
+    def test_unsloth_llama32_11b_vision_image_smoke(self):
+        _ensure_cuda_or_skip(self)
+        _ensure_env_enabled_or_skip(
+            self,
+            "AIRLLM_RUN_LLAMA32_11B_VISION_IMAGE",
+            "This smoke test is intentionally gated because first run can take several minutes "
+            "and requires downloading/splitting a large checkpoint.",
+        )
+
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("Pillow not installed; required for vision-image smoke test")
+
+        model = AutoModel.from_pretrained(
+            "unsloth/Llama-3.2-11B-Vision-Instruct",
+            device="cuda:0",
+            max_seq_len=128,
+            prefetching=False,
+            layers_per_batch=1,
+        )
+        processor = model.get_processor()
+
+        image = Image.new("RGB", (560, 560), color=(120, 180, 220))
+        prompt = "<|image|>Describe this image in one short sentence."
+        inputs = processor(text=prompt, images=image, return_tensors="pt")
+
+        out = model.generate(
+            input_ids=inputs["input_ids"].to("cuda:0"),
+            attention_mask=inputs.get("attention_mask", None).to("cuda:0") if inputs.get("attention_mask", None) is not None else None,
+            pixel_values=inputs.get("pixel_values", None),
+            aspect_ratio_ids=inputs.get("aspect_ratio_ids", None),
+            aspect_ratio_mask=inputs.get("aspect_ratio_mask", None),
+            cross_attention_mask=inputs.get("cross_attention_mask", None),
+            max_new_tokens=8,
+            use_cache=False,
+        )
+
+        prompt_len = inputs["input_ids"].shape[-1]
+        generated_ids = out[:, prompt_len:]
+        decoded = processor.batch_decode(
+            generated_ids,
+            skip_special_tokens=True,
+            clean_up_tokenization_spaces=False,
+        )[0]
+
+        self.assertIsInstance(decoded, str)
+        self.assertGreater(len(decoded.strip()), 0)
+
     def test_qwen3_coder_next_tool_calling(self):
         """Test tool-calling capability of Qwen3-Coder-Next-FP8-Dynamic.
         
