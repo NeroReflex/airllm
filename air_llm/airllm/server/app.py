@@ -60,6 +60,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return ModelListResponse(data=data)
 
     async def stream_chat(data: dict[str, Any]) -> AsyncGenerator[bytes, None]:
+        delta: dict[str, Any] = {"role": "assistant", "content": data["completion_text"]}
+        if data.get("tool_calls"):
+            delta["tool_calls"] = data["tool_calls"]
         chunk = {
             "id": data["id"],
             "object": "chat.completion.chunk",
@@ -68,8 +71,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "choices": [
                 {
                     "index": 0,
-                    "delta": {"role": "assistant", "content": data["completion_text"]},
-                    "finish_reason": "stop",
+                    "delta": delta,
+                    "finish_reason": data.get("finish_reason", "stop"),
                 }
             ],
         }
@@ -114,8 +117,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "choices": [
                 {
                     "index": 0,
-                    "message": {"role": "assistant", "content": response["completion_text"]},
-                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": response["completion_text"] or None,
+                        "tool_calls": response.get("tool_calls") or None,
+                    },
+                    "finish_reason": response.get("finish_reason", "stop"),
                 }
             ],
             "usage": response["usage"],

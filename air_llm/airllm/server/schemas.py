@@ -17,9 +17,15 @@ class ChatContentPart(BaseModel):
 class ChatMessage(BaseModel):
     role: Literal["system", "user", "assistant", "tool"]
     # content may be None for tool-result messages or structured assistant turns
-    content: Optional[Union[str, list[ChatContentPart]]] = None
+    content: Optional[Union[str, list[ChatContentPart], list[dict[str, Any]]]] = None
     name: Optional[str] = None
     tool_call_id: Optional[str] = None
+    # Preserve assistant tool calls across turns (required by some templates,
+    # including MiniMax-M2.5).
+    tool_calls: Optional[list[dict[str, Any]]] = None
+    reasoning_content: Optional[str] = None
+    current_date: Optional[str] = None
+    current_location: Optional[str] = None
 
 
 class ChatCompletionRequest(BaseModel):

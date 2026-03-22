@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import base64
 import io
+import json
+import re
 import threading
 import time
 import uuid
@@ -247,6 +249,43 @@ class ServerRunner:
         parts.append("ASSISTANT:")
         return "\n".join(parts)
 
+    def _extract_tool_calls_from_completion(
+        self,
+        completion: str,
+    ) -> tuple[str, list[dict[str, Any]]]:
+        """Parse MiniMax-style XML tool calls into OpenAI-compatible objects."""
+        block_re = re.compile(
+            r"<minimax:tool_call>(.*?)</minimax:tool_call>", re.DOTALL
+        )
+        invoke_re = re.compile(r'<invoke\s+name="([^"]+)">(.*?)</invoke>', re.DOTALL)
+        param_re = re.compile(
+            r'<parameter\s+name="([^"]+)">(.*?)</parameter>', re.DOTALL
+        )
+
+        tool_calls: list[dict[str, Any]] = []
+        for block in block_re.findall(completion or ""):
+            for name, invoke_body in invoke_re.findall(block):
+                args_obj: dict[str, Any] = {}
+                for key, raw_value in param_re.findall(invoke_body):
+                    value = raw_value.strip()
+                    try:
+                        args_obj[key] = json.loads(value)
+                    except Exception:
+                        args_obj[key] = value
+                tool_calls.append(
+                    {
+                        "id": f"call_{uuid.uuid4().hex[:24]}",
+                        "type": "function",
+                        "function": {
+                            "name": name,
+                            "arguments": json.dumps(args_obj, ensure_ascii=False),
+                        },
+                    }
+                )
+
+        cleaned = block_re.sub("", completion or "").strip()
+        return cleaned, tool_calls
+
     # ------------------------------------------------------------------
     # Image helpers
     # ------------------------------------------------------------------
@@ -341,12 +380,17 @@ class ServerRunner:
             prompt_tokens = int(input_ids.shape[-1])
             completion_tokens = int(completion_ids.shape[-1])
 
+        clean_text, tool_calls = self._extract_tool_calls_from_completion(completion)
+        finish_reason = "tool_calls" if tool_calls else "stop"
+
         return {
             "id": f"chatcmpl-{uuid.uuid4().hex}",
             "object": "chat.completion",
             "created": int(time.time()),
             "model": self.loaded_model_id,
-            "completion_text": completion,
+            "completion_text": clean_text,
+            "tool_calls": tool_calls,
+            "finish_reason": finish_reason,
             "usage": {
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,

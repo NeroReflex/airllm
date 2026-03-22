@@ -357,3 +357,57 @@ class TestNaiveFormat(unittest.TestCase):
     def test_empty_messages_list(self):
         prompt = self._naive([])
         self.assertEqual(prompt, "ASSISTANT:")
+
+
+class TestExtractToolCalls(unittest.TestCase):
+    """Unit tests for ServerRunner._extract_tool_calls_from_completion."""
+
+    def _parse(self, text):
+        runner = _runner_with_tokenizer()
+        return runner._extract_tool_calls_from_completion(text)
+
+    def test_no_tool_call_block(self):
+        clean, tool_calls = self._parse("hello world")
+        self.assertEqual(clean, "hello world")
+        self.assertEqual(tool_calls, [])
+
+    def test_single_tool_call_block(self):
+        text = (
+            "<minimax:tool_call>\n"
+            '<invoke name="get_weather">\n'
+            '<parameter name="city">"Paris"</parameter>\n'
+            '<parameter name="days">3</parameter>\n'
+            "</invoke>\n"
+            "</minimax:tool_call>"
+        )
+        clean, tool_calls = self._parse(text)
+        self.assertEqual(clean, "")
+        self.assertEqual(len(tool_calls), 1)
+        self.assertEqual(tool_calls[0]["type"], "function")
+        self.assertEqual(tool_calls[0]["function"]["name"], "get_weather")
+        self.assertEqual(
+            tool_calls[0]["function"]["arguments"],
+            '{"city": "Paris", "days": 3}',
+        )
+
+    def test_multiple_invokes_are_parsed(self):
+        text = (
+            "prefix\n"
+            "<minimax:tool_call>\n"
+            '<invoke name="a"><parameter name="x">1</parameter></invoke>\n'
+            '<invoke name="b"><parameter name="y">2</parameter></invoke>\n'
+            "</minimax:tool_call>\n"
+            "suffix"
+        )
+        clean, tool_calls = self._parse(text)
+        self.assertEqual(clean, "prefix\n\nsuffix")
+        self.assertEqual([tc["function"]["name"] for tc in tool_calls], ["a", "b"])
+
+    def test_non_json_parameter_stays_string(self):
+        text = (
+            "<minimax:tool_call>\n"
+            '<invoke name="search"><parameter name="query">foo bar</parameter></invoke>\n'
+            "</minimax:tool_call>"
+        )
+        _, tool_calls = self._parse(text)
+        self.assertEqual(tool_calls[0]["function"]["arguments"], '{"query": "foo bar"}')
