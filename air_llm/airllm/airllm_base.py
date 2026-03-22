@@ -102,6 +102,11 @@ class AirLLMBaseModel(GenerationMixin):
         self.total_compression_overhead_time = None
         self._supports_cache_class = False
         self.hf_quantizer = None
+        
+        # Rotary embedding cache: avoid recomputing per-layer (optimization)
+        self.enable_rotary_cache = True  # Set to False to bypass optimization
+        self._cached_pos_embeddings = None
+        self._cached_pos_emb_key = None  # (seq_len, pos_ids_hash) tuple to detect cache invalidation
 
         if compression is not None:
             if not bitsandbytes_installed:
@@ -554,6 +559,49 @@ class AirLLMBaseModel(GenerationMixin):
     def run_lm_head(self, layer, seq):
         return layer(seq).float()
 
+    def _compute_cached_pos_embeddings(self, seq_len, pos_ids):
+        """Compute and cache position embeddings to avoid per-layer recomputation.
+        
+        Args:
+            seq_len: Sequence length of current input
+            pos_ids: Position IDs tensor
+            
+        Returns:
+            Cached position embeddings or None if caching disabled
+        """
+        if not self.enable_rotary_cache or self._rotary_emb is None:
+            return None
+        
+        # Create a simple cache key from seq_len and pos_ids shape
+        cache_key = (seq_len, pos_ids.shape[-1])
+        
+        # Check if already cached
+        if self._cached_pos_emb_key == cache_key and self._cached_pos_embeddings is not None:
+            return self._cached_pos_embeddings
+        
+        # Compute and cache new embeddings
+        pos_emb = self._rotary_emb(seq_len, pos_ids)
+        self._cached_pos_embeddings = pos_emb
+        self._cached_pos_emb_key = cache_key
+        
+        return pos_emb
+
+    def _get_or_compute_pos_embeddings(self, seq_len, pos_ids):
+        """Get position embeddings from cache if available, else compute.
+        
+        Args:
+            seq_len: Sequence length (used for caching key)
+            pos_ids: Position IDs tensor
+            
+        Returns:
+            Position embeddings tensor
+        """
+        if not self.enable_rotary_cache:
+            return self._rotary_emb(seq_len, pos_ids) if self._rotary_emb is not None else None
+        
+        cached = self._compute_cached_pos_embeddings(seq_len, pos_ids)
+        return cached
+
     def run_norm(self, layer, seq):
         return layer(seq)
 
@@ -603,6 +651,10 @@ class AirLLMBaseModel(GenerationMixin):
         self._rotary_emb = None
         if hasattr(self.model, 'model') and hasattr(self.model.model, 'rotary_emb'):
             self._rotary_emb = self.model.model.rotary_emb
+        
+        # Clear rotary embedding cache at start of forward pass
+        self._cached_pos_embeddings = None
+        self._cached_pos_emb_key = None
 
         kv_cache_list = [] if use_cache else None
         if use_cache:
@@ -716,7 +768,7 @@ class AirLLMBaseModel(GenerationMixin):
                                           **position_ids_args}
                                 if self._rotary_emb is not None:
                                     pos_ids = position_ids_args.get('position_ids', position_ids[:, len_p:len_p + len_s])
-                                    kwargs['position_embeddings'] = self._rotary_emb(seq, pos_ids)
+                                    kwargs['position_embeddings'] = self._get_or_compute_pos_embeddings(len_s, pos_ids)
 
 
                                 layer_outputs = layer(seq,
@@ -753,7 +805,7 @@ class AirLLMBaseModel(GenerationMixin):
                                     kwargs = {**kwargs, **pos_embed_args, **attention_mask_args, **position_ids_args}
                                     if self._rotary_emb is not None:
                                         pos_ids = position_ids_args.get('position_ids', position_ids[:, :len_seq])
-                                        kwargs['position_embeddings'] = self._rotary_emb(seq, pos_ids)
+                                        kwargs['position_embeddings'] = self._get_or_compute_pos_embeddings(len_seq, pos_ids)
 
 
                                     layer_out = layer(seq, **kwargs)
@@ -766,7 +818,7 @@ class AirLLMBaseModel(GenerationMixin):
                                     kwargs = {**kwargs, **pos_embed_args, **attention_mask_args, **position_ids_args}
                                     if self._rotary_emb is not None:
                                         pos_ids = position_ids_args.get('position_ids', position_ids[:, :len_seq])
-                                        kwargs['position_embeddings'] = self._rotary_emb(seq, pos_ids)
+                                        kwargs['position_embeddings'] = self._get_or_compute_pos_embeddings(len_seq, pos_ids)
 
                                     layer_out = layer(seq, **kwargs)
 
