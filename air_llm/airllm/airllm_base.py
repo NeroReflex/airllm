@@ -288,6 +288,10 @@ class AirLLMBaseModel(GenerationMixin):
 
         # Move buffers to device (not that much GPU memory used)
         for buffer_name, buffer in self.model.named_buffers():
+            # Some layer buffers can legitimately be on meta after streaming
+            # cleanup. Meta tensors carry no data and cannot be copied out.
+            if getattr(buffer, "is_meta", False):
+                continue
             set_module_tensor_to_device(self.model, buffer_name, self.running_device, value=buffer,
                                         dtype=self.running_dtype)
 
@@ -303,6 +307,10 @@ class AirLLMBaseModel(GenerationMixin):
         clean_memory()
         self.set_layers_from_layer_names()
         for buffer_name, buffer in self.model.named_buffers():
+            # After forward cleanup, many streamed layer buffers are meta.
+            # Skip them here; they are restored when each layer shard is loaded.
+            if getattr(buffer, "is_meta", False):
+                continue
             set_module_tensor_to_device(self.model, buffer_name, self.running_device, value=buffer,
                                         dtype=self.running_dtype)
         if 'rotary_pos_emb' in self.layer_names_dict:
