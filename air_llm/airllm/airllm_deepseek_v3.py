@@ -1,3 +1,7 @@
+import os
+import re
+import warnings
+
 from accelerate import init_empty_weights
 from accelerate.utils.modeling import set_module_tensor_to_device
 from transformers import AutoModelForCausalLM, GenerationConfig
@@ -27,6 +31,11 @@ class AirLLMDeepseekV3(AirLLMBaseModel):
     """
 
     def __init__(self, *args, **kwargs):
+        # Experimental low-VRAM mode: cap experts instantiated per MoE layer.
+        raw_cap = os.environ.get("AIRLLM_DEEPSEEK_MAX_LOCAL_EXPERTS", "").strip()
+        self.max_local_experts = int(raw_cap) if raw_cap.isdigit() and int(raw_cap) > 0 else None
+        self._warned_low_vram_cap = False
+        self._expert_idx_re = re.compile(r"\.experts\.(\d+)\.")
         super().__init__(*args, **kwargs)
 
     def get_use_better_transformer(self):
@@ -66,6 +75,44 @@ class AirLLMDeepseekV3(AirLLMBaseModel):
         if getattr(cfg, "num_local_experts", None) is None:
             cfg.num_local_experts = int(getattr(cfg, "n_routed_experts", 0))
 
+        # Optional cap for low-VRAM experimentation. This reduces model capacity
+        # and quality, but can make local inference feasible on small GPUs.
+        if self.max_local_experts is not None:
+            current = int(getattr(cfg, "n_routed_experts", cfg.num_local_experts))
+            capped = min(current, self.max_local_experts)
+            cfg.num_local_experts = capped
+            if hasattr(cfg, "n_routed_experts"):
+                cfg.n_routed_experts = capped
+
+            if not self._warned_low_vram_cap:
+                warnings.warn(
+                    (
+                        "AIRLLM_DEEPSEEK_MAX_LOCAL_EXPERTS is enabled "
+                        f"({capped}/{current} experts). "
+                        "This is an experimental low-VRAM mode that "
+                        "significantly degrades quality and does not reflect "
+                        "full DeepSeek-V3.1 behavior."
+                    ),
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                self._warned_low_vram_cap = True
+
+            # Keep routing knobs internally consistent after shrinking experts.
+            if hasattr(cfg, "num_experts_per_tok"):
+                cfg.num_experts_per_tok = max(1, min(int(cfg.num_experts_per_tok), capped))
+
+            if hasattr(cfg, "n_group"):
+                n_group = max(1, min(int(cfg.n_group), capped))
+                # Router uses topk(2) per-group in remote code. Ensure at least
+                # 2 experts/group when possible, otherwise fall back to 1 group.
+                if capped >= 2:
+                    n_group = max(1, min(n_group, capped // 2))
+                cfg.n_group = n_group
+
+                if hasattr(cfg, "topk_group"):
+                    cfg.topk_group = max(1, min(int(cfg.topk_group), n_group))
+
         # rope_interleave is read on every attention layer forward – must exist.
         if not hasattr(cfg, "rope_interleave"):
             cfg.rope_interleave = True
@@ -76,6 +123,54 @@ class AirLLMDeepseekV3(AirLLMBaseModel):
                 val = rope_params.get(key)
                 if isinstance(val, int):
                     rope_params[key] = float(val)
+
+    def _should_skip_param_name(self, param_name: str) -> bool:
+        if self.max_local_experts is None:
+            return False
+        m = self._expert_idx_re.search(param_name)
+        return bool(m and int(m.group(1)) >= self.max_local_experts)
+
+    def _get_model_tensor_shape(self, param_name: str):
+        """Return target tensor shape for ``param_name`` if it exists."""
+        obj = self.model
+        parts = param_name.split(".")
+        for p in parts[:-1]:
+            if p.isdigit():
+                idx = int(p)
+                if not hasattr(obj, "__getitem__"):
+                    return None
+                if idx >= len(obj):
+                    return None
+                obj = obj[idx]
+            else:
+                if not hasattr(obj, p):
+                    return None
+                obj = getattr(obj, p)
+
+        leaf = parts[-1]
+        if not hasattr(obj, leaf):
+            return None
+        tensor = getattr(obj, leaf)
+        if hasattr(tensor, "shape"):
+            return tuple(tensor.shape)
+        return None
+
+    @staticmethod
+    def _fit_tensor_to_target_shape(tensor, target_shape):
+        """Crop tensor to ``target_shape`` when source dimensions are larger."""
+        if target_shape is None:
+            return None
+        if tuple(tensor.shape) == tuple(target_shape):
+            return tensor
+        if tensor.ndim != len(target_shape):
+            return None
+
+        slices = []
+        for src, tgt in zip(tensor.shape, target_shape):
+            if src < tgt:
+                return None
+            slices.append(slice(0, tgt))
+        return tensor[tuple(slices)].contiguous()
 
     def _finalize_model_init_deepseek(self):
         """Like ``_finalize_model_init`` but skips the FP8 quantizer.
@@ -157,6 +252,12 @@ class AirLLMDeepseekV3(AirLLMBaseModel):
         for key, tensor in state_dict.items():
             if key in consumed:
                 continue
+
+            if self._should_skip_param_name(key):
+                consumed.add(key)
+                consumed.add(key + "_scale_inv")
+                continue
+
             if tensor.dtype == torch.float8_e4m3fn:
                 scale_inv_key = key + "_scale_inv"
                 if scale_inv_key in state_dict:
@@ -187,6 +288,16 @@ class AirLLMDeepseekV3(AirLLMBaseModel):
         from accelerate.utils.modeling import set_module_tensor_to_device as _smtd
         layers = []
         for param_name, param in merged.items():
+            target_shape = self._get_model_tensor_shape(param_name)
+            if target_shape is None:
+                continue
+
+            if tuple(param.shape) != tuple(target_shape):
+                fitted = self._fit_tensor_to_target_shape(param, target_shape)
+                if fitted is None:
+                    continue
+                param = fitted
+
             layers.append(param_name)
             _smtd(
                 self.model, param_name, self.running_device,
