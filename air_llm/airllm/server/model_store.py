@@ -17,7 +17,6 @@ class ModelStore:
         return snapshot_download(
             repo_id=model_id,
             token=self.hf_token,
-            resume_download=True,
         )
 
     def list_local_models(self) -> list[str]:
