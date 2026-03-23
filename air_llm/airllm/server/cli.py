@@ -30,6 +30,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
     pull: argparse.ArgumentParser = sub.add_parser("pull", help="Download a model to local cache")
     pull.add_argument("model", help="Model id to pull (e.g. meta-llama/Llama-3.1-8B-Instruct)")
+    pull.add_argument(
+        "--hf-token",
+        default=None,
+        help="Hugging Face access token (defaults to HF_TOKEN env var)",
+    )
 
     models: argparse.ArgumentParser = sub.add_parser("models", help="List locally available models")
     models.add_argument("--json", action="store_true", help="Output JSON")
@@ -67,7 +72,8 @@ def _cmd_serve(args: argparse.Namespace) -> int:
 
 def _cmd_pull(args: argparse.Namespace) -> int:
     settings = Settings()
-    store = ModelStore(settings.cache_dir, hf_token=settings.hf_token)
+    hf_token: str = args.hf_token if args.hf_token is not None else settings.hf_token
+    store = ModelStore(settings.cache_dir, hf_token=hf_token)
     path: str = store.pull(args.model)
     print(f"Pulled {args.model} to {path}")
     return 0
