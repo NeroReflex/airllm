@@ -6,6 +6,11 @@ import uvicorn
 from .config import Settings
 from .model_store import ModelStore
 
+# ANSI colour codes for the run command output.
+_ANSI_THINK = "\033[2;36m"   # dim cyan  – thinking / <think> content
+_ANSI_ANSWER = "\033[0;97m"  # bright white – final answer
+_ANSI_RESET = "\033[0m"
+
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="airllm", description="AirLLM server and model utilities")
@@ -36,11 +41,43 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Hugging Face access token (defaults to HF_TOKEN env var)",
     )
 
-    models: argparse.ArgumentParser = sub.add_parser("models", help="List locally available models")
-    models.add_argument("--json", action="store_true", help="Output JSON")
+    ls: argparse.ArgumentParser = sub.add_parser("ls", help="List locally available models")
+    ls.add_argument("--json", action="store_true", help="Output JSON")
+
+    # Keep 'models' as a hidden backward-compatible alias.
+    models: argparse.ArgumentParser = sub.add_parser("models", help=argparse.SUPPRESS)
+    models.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
 
     rm: argparse.ArgumentParser = sub.add_parser("rm", help="Remove model from local cache")
     rm.add_argument("model", help="Model id to remove")
+
+    run: argparse.ArgumentParser = sub.add_parser(
+        "run",
+        help="Load a model and start an interactive chat (Ollama-style)",
+    )
+    run.add_argument("model", help="Model id to run")
+    run.add_argument(
+        "--hf-token",
+        default=None,
+        help="Hugging Face access token (defaults to HF_TOKEN env var)",
+    )
+    run.add_argument("--max-tokens", type=int, default=None, help="Max new tokens per reply")
+    run.add_argument("--temperature", type=float, default=None, help="Sampling temperature")
+    run.add_argument("--top-p", type=float, default=None, help="Top-p sampling")
+    run.add_argument(
+        "--no-color",
+        action="store_true",
+        help="Disable colored thinking/answer output",
+    )
+    run.add_argument(
+        "--chat-template",
+        default=None,
+        metavar="PATH_OR_MODE",
+        help=(
+            "Jinja2 chat-template control. Accepted values: a path to a .jinja "
+            "file; 'none' to disable templating; empty to use the model's built-in template."
+        ),
+    )
 
     return parser
 
@@ -106,6 +143,178 @@ def _cmd_rm(args: argparse.Namespace) -> int:
     return 1
 
 
+def _cmd_run(args: argparse.Namespace) -> int:  # noqa: C901
+    """Interactive chat loop, printing <think> blocks and answers in different colors."""
+    import re
+    import threading
+
+    settings = Settings()
+    if getattr(args, "hf_token", None):
+        settings.hf_token = args.hf_token
+    if getattr(args, "chat_template", None) is not None:
+        settings.chat_template = args.chat_template
+
+    settings.model_id = args.model
+
+    max_tokens: int = getattr(args, "max_tokens", None) or settings.max_new_tokens
+    temperature: float = getattr(args, "temperature", None) or settings.temperature
+    top_p: float = getattr(args, "top_p", None) or settings.top_p
+    use_color: bool = not getattr(args, "no_color", False)
+
+    from .runner import ServerRunner
+    from transformers import TextIteratorStreamer
+
+    runner = ServerRunner(settings)
+
+    think_start = _ANSI_THINK if use_color else ""
+    think_end = _ANSI_RESET if use_color else ""
+    answer_start = _ANSI_ANSWER if use_color else ""
+    answer_end = _ANSI_RESET if use_color else ""
+
+    def _print_stream(streamer: TextIteratorStreamer, thread: threading.Thread) -> str:
+        """Print tokens as they arrive, switching color between <think> and answer."""
+        # States: "answer" | "think"
+        state = "answer"
+        buffer = ""   # partial tag accumulator
+        full_text = ""
+
+        in_think_re = re.compile(r"<think>", re.IGNORECASE)
+        out_think_re = re.compile(r"</think>", re.IGNORECASE)
+
+        # Print the initial color for the answer region.
+        sys.stdout.write(answer_start)
+        sys.stdout.flush()
+
+        try:
+            for token in streamer:
+                full_text += token
+                buffer += token
+                output = ""
+
+                # Process the buffer looking for <think> / </think> transitions.
+                while buffer:
+                    if state == "answer":
+                        m = in_think_re.search(buffer)
+                        if m:
+                            pre = buffer[: m.start()]
+                            if pre:
+                                output += pre
+                            output += answer_end + think_start
+                            state = "think"
+                            buffer = buffer[m.end() :]
+                        else:
+                            # Might be the start of a partial tag at the tail.
+                            if "<" in buffer:
+                                last_lt = buffer.rfind("<")
+                                output += buffer[:last_lt]
+                                buffer = buffer[last_lt:]
+                                break
+                            else:
+                                output += buffer
+                                buffer = ""
+                    else:  # state == "think"
+                        m = out_think_re.search(buffer)
+                        if m:
+                            pre = buffer[: m.start()]
+                            if pre:
+                                output += pre
+                            output += think_end + answer_start
+                            state = "answer"
+                            buffer = buffer[m.end() :]
+                        else:
+                            if "<" in buffer:
+                                last_lt = buffer.rfind("<")
+                                output += buffer[:last_lt]
+                                buffer = buffer[last_lt:]
+                                break
+                            else:
+                                output += buffer
+                                buffer = ""
+
+                if output:
+                    sys.stdout.write(output)
+                    sys.stdout.flush()
+        finally:
+            thread.join()
+
+        # Flush remaining buffer (incomplete tag at EOF).
+        if buffer:
+            sys.stdout.write(buffer)
+        sys.stdout.write(answer_end + "\n")
+        sys.stdout.flush()
+        return full_text
+
+    print(f"Loading {args.model} …", flush=True)
+    runner.load_model_if_needed(args.model)
+    print(f"Model ready. Type your message and press Enter. Use /bye or Ctrl-D to quit.\n", flush=True)
+
+    conversation: list[dict] = []
+
+    while True:
+        try:
+            user_input = input("\033[1;32m>>> \033[0m" if use_color else ">>> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+
+        if not user_input:
+            continue
+        if user_input.lower() in ("/bye", "/exit", "/quit"):
+            break
+
+        conversation.append({"role": "user", "content": user_input})
+
+        try:
+            meta, streamer, thread = runner.generate_chat_streaming(
+                messages=conversation,
+                model_id=args.model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                suppress_output=True,
+            )
+        except Exception as exc:
+            print(f"\nStreaming unavailable ({exc}), falling back to single-shot…", flush=True)
+            response = runner.generate_chat(
+                messages=conversation,
+                model_id=args.model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                suppress_output=True,
+            )
+            full_text = response["completion_text"]
+            # Colour the output manually for single-shot too.
+            _print_static(full_text, use_color)
+        else:
+            full_text = _print_stream(streamer, thread)
+
+        conversation.append({"role": "assistant", "content": full_text})
+
+    return 0
+
+
+def _print_static(text: str, use_color: bool) -> None:
+    """Print a complete response string with think/answer colouring."""
+    import re
+
+    if not use_color:
+        print(text)
+        return
+
+    think_re = re.compile(r"(<think>)(.*?)(</think>)", re.IGNORECASE | re.DOTALL)
+    pos = 0
+    for m in think_re.finditer(text):
+        if m.start() > pos:
+            sys.stdout.write(_ANSI_ANSWER + text[pos : m.start()] + _ANSI_RESET)
+        sys.stdout.write(_ANSI_THINK + m.group(2) + _ANSI_RESET)
+        pos = m.end()
+    if pos < len(text):
+        sys.stdout.write(_ANSI_ANSWER + text[pos:] + _ANSI_RESET)
+    sys.stdout.write("\n")
+    sys.stdout.flush()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser: argparse.ArgumentParser = _build_parser()
     args: argparse.Namespace = parser.parse_args(argv)
@@ -114,10 +323,12 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_serve(args)
     if args.command == "pull":
         return _cmd_pull(args)
-    if args.command == "models":
+    if args.command in ("models", "ls"):
         return _cmd_models(args)
     if args.command == "rm":
         return _cmd_rm(args)
+    if args.command == "run":
+        return _cmd_run(args)
 
     parser.print_help()
     return 2

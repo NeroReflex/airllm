@@ -17,6 +17,9 @@ from airllm import AutoModel
 from .config import Settings
 
 
+_QUIET_SENTINEL = object()
+
+
 class ServerRunner:
     def __init__(self, settings: Settings) -> None:
         self.settings: Settings = settings
@@ -321,6 +324,25 @@ class ServerRunner:
         except Exception:
             return None
 
+    def _set_quiet_generation(self, enabled: bool) -> Any:
+        """Toggle backend-specific generation progress/log output."""
+        if self.model is None or not enabled:
+            return None
+        previous = getattr(self.model, "quiet_generation", _QUIET_SENTINEL)
+        setattr(self.model, "quiet_generation", True)
+        return previous
+
+    def _restore_quiet_generation(self, previous: Any, enabled: bool) -> None:
+        if self.model is None or not enabled or previous is None:
+            return
+        if previous is _QUIET_SENTINEL:
+            try:
+                delattr(self.model, "quiet_generation")
+            except AttributeError:
+                pass
+        else:
+            setattr(self.model, "quiet_generation", previous)
+
     # ------------------------------------------------------------------
     # Inference
     # ------------------------------------------------------------------
@@ -334,6 +356,7 @@ class ServerRunner:
         top_p: float,
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
+        suppress_output: bool = False,
     ) -> dict[str, Any]:
         self.load_model_if_needed(model_id)
         prompt, images, used_template = self._flatten_messages_to_prompt(
@@ -345,20 +368,24 @@ class ServerRunner:
         if images and hasattr(self.model, "get_processor"):
             processor = self.model.get_processor()
             inputs = processor(text=prompt, images=images, return_tensors="pt")
-            output_ids = self.model.generate(
-                input_ids=inputs["input_ids"].to(self.settings.device),
-                attention_mask=(
-                    inputs["attention_mask"].to(self.settings.device)
-                    if inputs.get("attention_mask") is not None
-                    else None
-                ),
-                pixel_values=inputs.get("pixel_values"),
-                aspect_ratio_ids=inputs.get("aspect_ratio_ids"),
-                aspect_ratio_mask=inputs.get("aspect_ratio_mask"),
-                cross_attention_mask=inputs.get("cross_attention_mask"),
-                max_new_tokens=max_tokens,
-                use_cache=False,
-            )
+            previous_quiet = self._set_quiet_generation(suppress_output)
+            try:
+                output_ids = self.model.generate(
+                    input_ids=inputs["input_ids"].to(self.settings.device),
+                    attention_mask=(
+                        inputs["attention_mask"].to(self.settings.device)
+                        if inputs.get("attention_mask") is not None
+                        else None
+                    ),
+                    pixel_values=inputs.get("pixel_values"),
+                    aspect_ratio_ids=inputs.get("aspect_ratio_ids"),
+                    aspect_ratio_mask=inputs.get("aspect_ratio_mask"),
+                    cross_attention_mask=inputs.get("cross_attention_mask"),
+                    max_new_tokens=max_tokens,
+                    use_cache=False,
+                )
+            finally:
+                self._restore_quiet_generation(previous_quiet, suppress_output)
             n_in = int(inputs["input_ids"].shape[-1])
             completion_ids = output_ids[0][n_in:]
             completion = processor.decode(
@@ -375,6 +402,11 @@ class ServerRunner:
                 add_special_tokens=not used_template,
             )
             input_ids = toks["input_ids"].to(self.settings.device)
+            attention_mask = (
+                toks["attention_mask"].to(self.settings.device)
+                if toks.get("attention_mask") is not None
+                else None
+            )
             kwargs: dict[str, Any] = {
                 "max_new_tokens": max_tokens,
                 "use_cache": False,
@@ -383,7 +415,13 @@ class ServerRunner:
                 kwargs["do_sample"] = True
                 kwargs["temperature"] = temperature
                 kwargs["top_p"] = top_p
-            output_ids = self.model.generate(input_ids, **kwargs)
+            if attention_mask is not None:
+                kwargs["attention_mask"] = attention_mask
+            previous_quiet = self._set_quiet_generation(suppress_output)
+            try:
+                output_ids = self.model.generate(input_ids, **kwargs)
+            finally:
+                self._restore_quiet_generation(previous_quiet, suppress_output)
             completion_ids = output_ids[0][input_ids.shape[-1] :]
             completion = self.tokenizer.decode(
                 completion_ids, skip_special_tokens=True
@@ -409,6 +447,83 @@ class ServerRunner:
             },
         }
 
+    def generate_chat_streaming(
+        self,
+        messages: list[dict[str, Any]],
+        model_id: str | None,
+        max_tokens: int,
+        temperature: float,
+        top_p: float,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+        suppress_output: bool = False,
+    ) -> tuple[dict[str, Any], Any, threading.Thread]:
+        """Start streaming chat generation using TextIteratorStreamer.
+
+        Returns ``(meta, streamer, thread)`` immediately.  The caller must
+        consume *streamer* to receive tokens in real time, then join *thread*.
+        Falls back to a single-shot generator if the model does not support
+        the ``streamer`` kwarg (e.g. the MLX backend).
+        """
+        from transformers import TextIteratorStreamer
+
+        self.load_model_if_needed(model_id)
+        prompt, images, used_template = self._flatten_messages_to_prompt(
+            messages, tools=tools, tool_choice=tool_choice
+        )
+
+        toks = self.tokenizer(
+            [prompt],
+            return_tensors="pt",
+            truncation=True,
+            max_length=self.effective_max_seq_len,
+            add_special_tokens=not used_template,
+        )
+        input_ids = toks["input_ids"].to(self.settings.device)
+        attention_mask = (
+            toks["attention_mask"].to(self.settings.device)
+            if toks.get("attention_mask") is not None
+            else None
+        )
+        prompt_tokens = int(input_ids.shape[-1])
+
+        streamer = TextIteratorStreamer(
+            self.tokenizer,
+            skip_special_tokens=True,
+            timeout=120.0,
+        )
+
+        gen_kwargs: dict[str, Any] = {
+            "input_ids": input_ids,
+            "max_new_tokens": max_tokens,
+            "use_cache": False,
+            "streamer": streamer,
+        }
+        if attention_mask is not None:
+            gen_kwargs["attention_mask"] = attention_mask
+        if temperature > 0:
+            gen_kwargs["do_sample"] = True
+            gen_kwargs["temperature"] = temperature
+            gen_kwargs["top_p"] = top_p
+
+        def _run_generate() -> None:
+            previous_quiet = self._set_quiet_generation(suppress_output)
+            try:
+                self.model.generate(**gen_kwargs)
+            finally:
+                self._restore_quiet_generation(previous_quiet, suppress_output)
+
+        thread = threading.Thread(target=_run_generate, daemon=True)
+        thread.start()
+
+        meta = {
+            "id": f"chatcmpl-{uuid.uuid4().hex}",
+            "created": int(time.time()),
+            "model": self.loaded_model_id,
+            "prompt_tokens": prompt_tokens,
+        }
+        return meta, streamer, thread
+
     def generate_completion(
         self,
         prompt: str,
@@ -416,6 +531,7 @@ class ServerRunner:
         max_tokens: int,
         temperature: float,
         top_p: float,
+        suppress_output: bool = False,
     ) -> dict[str, Any]:
         self.load_model_if_needed(model_id)
         toks = self.tokenizer(
@@ -425,6 +541,11 @@ class ServerRunner:
             max_length=self.effective_max_seq_len,
         )
         input_ids = toks["input_ids"].to(self.settings.device)
+        attention_mask = (
+            toks["attention_mask"].to(self.settings.device)
+            if toks.get("attention_mask") is not None
+            else None
+        )
 
         kwargs: dict[str, Any] = {
             "max_new_tokens": max_tokens,
@@ -434,8 +555,14 @@ class ServerRunner:
             kwargs["do_sample"] = True
             kwargs["temperature"] = temperature
             kwargs["top_p"] = top_p
+        if attention_mask is not None:
+            kwargs["attention_mask"] = attention_mask
 
-        output_ids = self.model.generate(input_ids, **kwargs)
+        previous_quiet = self._set_quiet_generation(suppress_output)
+        try:
+            output_ids = self.model.generate(input_ids, **kwargs)
+        finally:
+            self._restore_quiet_generation(previous_quiet, suppress_output)
         completion_ids = output_ids[0][input_ids.shape[-1] :]
         completion = self.tokenizer.decode(
             completion_ids, skip_special_tokens=True

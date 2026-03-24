@@ -1,3 +1,4 @@
+import asyncio
 import json
 from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
@@ -62,6 +63,47 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         data: list[ModelInfo] = [ModelInfo(id=m) for m in dict.fromkeys(local)]
         return ModelListResponse(data=data)
 
+    async def stream_chat_tokens(
+        meta: dict[str, Any],
+        streamer: Any,
+        thread: Any,
+    ) -> AsyncGenerator[bytes, None]:
+        """Yield per-token SSE chunks from a TextIteratorStreamer in real time."""
+        loop = asyncio.get_event_loop()
+        try:
+            # Drain the streamer in a thread-pool so we don't block the event loop.
+            while True:
+                try:
+                    token: str = await loop.run_in_executor(None, next, streamer)
+                except StopIteration:
+                    break
+                chunk = {
+                    "id": meta["id"],
+                    "object": "chat.completion.chunk",
+                    "created": meta["created"],
+                    "model": meta["model"],
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"role": "assistant", "content": token},
+                            "finish_reason": None,
+                        }
+                    ],
+                }
+                yield f"data: {json.dumps(chunk)}\n\n".encode("utf-8")
+        finally:
+            thread.join()
+        # Closing chunk
+        done_chunk = {
+            "id": meta["id"],
+            "object": "chat.completion.chunk",
+            "created": meta["created"],
+            "model": meta["model"],
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        }
+        yield f"data: {json.dumps(done_chunk)}\n\n".encode("utf-8")
+        yield b"data: [DONE]\n\n"
+
     async def stream_chat(data: dict[str, Any]) -> AsyncGenerator[bytes, None]:
         delta: dict[str, Any] = {"role": "assistant", "content": data["completion_text"]}
         if data.get("tool_calls"):
@@ -103,12 +145,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/v1/chat/completions", dependencies=[Depends(check_auth)], response_model=None)
     async def chat_completions(req: ChatCompletionRequest) -> Response:
+        temperature = req.temperature if req.temperature is not None else settings.temperature
+        top_p = req.top_p if req.top_p is not None else settings.top_p
+        max_tokens = req.max_tokens if req.max_tokens is not None else settings.max_new_tokens
+        messages = [m.model_dump(mode="json") for m in req.messages]
+
+        if req.stream:
+            try:
+                meta, streamer, thread = runner.generate_chat_streaming(
+                    messages=messages,
+                    model_id=req.model,
+                    temperature=temperature,
+                    top_p=top_p,
+                    max_tokens=max_tokens,
+                    tools=req.tools or None,
+                    tool_choice=req.tool_choice,
+                )
+                return StreamingResponse(
+                    stream_chat_tokens(meta, streamer, thread),
+                    media_type="text/event-stream",
+                )
+            except Exception:
+                # Fall back to single-shot if streaming is unavailable (e.g. MLX).
+                pass
+
         response = runner.generate_chat(
-            messages=[m.model_dump(mode="json") for m in req.messages],
+            messages=messages,
             model_id=req.model,
-            temperature=req.temperature if req.temperature is not None else settings.temperature,
-            top_p=req.top_p if req.top_p is not None else settings.top_p,
-            max_tokens=req.max_tokens if req.max_tokens is not None else settings.max_new_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            max_tokens=max_tokens,
             tools=req.tools or None,
             tool_choice=req.tool_choice,
         )

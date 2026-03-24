@@ -709,9 +709,11 @@ class AirLLMBaseModel(GenerationMixin):
                 else:
                     self._cached_layers_per_batch = self.layers_per_batch
             layers_per_batch = self._cached_layers_per_batch
+            quiet_generation = getattr(self, 'quiet_generation', False)
 
             total_layers = len(self.layer_names)
-            print(f"Processing {total_layers} layers in batches of {layers_per_batch}")
+            if not quiet_generation:
+                print(f"Processing {total_layers} layers in batches of {layers_per_batch}")
 
             # Build batch boundaries
             batch_ranges = []
@@ -734,7 +736,11 @@ class AirLLMBaseModel(GenerationMixin):
                     next_names = self.layer_names[next_start:next_end]
                     future = executor.submit(self._load_batch_to_cpu, next_names)
 
-            pbar = tqdm(total=total_layers, desc=f'running layers({self.running_device})')
+            pbar = tqdm(
+                total=total_layers,
+                desc=f'running layers({self.running_device})',
+                disable=quiet_generation,
+            )
 
             for b_idx, (b_start, b_end) in enumerate(batch_ranges):
                 batch_size_layers = b_end - b_start
