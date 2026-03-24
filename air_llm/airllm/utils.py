@@ -279,13 +279,22 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
         for layer in layers:
             found_layers[layer] = ModelPersister.get_model_persister().model_persist_exist(layer, saving_path)
 
-        print(f"found_layers:{found_layers}")
+        completed_layers = [layer for layer, done in found_layers.items() if done]
+        missing_layers = [layer for layer, done in found_layers.items() if not done]
+
+        print(
+            f"[airllm] split status: {len(completed_layers)}/{len(layers)} layers ready under {saving_path}"
+        )
         if all(found_layers.values()):
             # already downloaded, return saving path...
-            print(f"saved layers already found in {saving_path}")
+            print(f"[airllm] split status: complete, reusing existing layer shards")
             return str(saving_path)
         else:
-            print(f"some layer splits found, some are not, re-save all layers in case there's some corruptions.")
+            first_missing = missing_layers[0].rstrip('.') if missing_layers else "unknown"
+            print(
+                f"[airllm] split status: partial, resuming from first missing layer '{first_missing}' "
+                f"({len(missing_layers)} missing)"
+            )
 
     if not delete_original:
         check_space(checkpoint_path, layer_shards_saving_path, compression, splitted_model_dir_name=splitted_model_dir_name)
@@ -313,6 +322,8 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
     if not os.path.exists(saving_path):
         #os.makedirs(saving_path)
         saving_path.mkdir(parents=True, exist_ok=True)
+
+    print(f"[airllm] split progress: preparing {len(layers)} layer shards")
 
     single_modelfile = None
 
