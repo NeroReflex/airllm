@@ -426,6 +426,8 @@ class ServerRunner:
                 kwargs["do_sample"] = True
                 kwargs["temperature"] = temperature
                 kwargs["top_p"] = top_p
+            else:
+                kwargs["do_sample"] = False
             if attention_mask is not None:
                 kwargs["attention_mask"] = attention_mask
             previous_quiet = self._set_quiet_generation(suppress_output)
@@ -518,6 +520,8 @@ class ServerRunner:
             gen_kwargs["do_sample"] = True
             gen_kwargs["temperature"] = temperature
             gen_kwargs["top_p"] = top_p
+        else:
+            gen_kwargs["do_sample"] = False
 
         def _run_generate() -> None:
             previous_quiet = self._set_quiet_generation(suppress_output)
@@ -568,6 +572,8 @@ class ServerRunner:
             kwargs["do_sample"] = True
             kwargs["temperature"] = temperature
             kwargs["top_p"] = top_p
+        else:
+            kwargs["do_sample"] = False
         if attention_mask is not None:
             kwargs["attention_mask"] = attention_mask
 

@@ -158,9 +158,13 @@ def _cmd_run(args: argparse.Namespace) -> int:  # noqa: C901
 
     settings.model_id = args.model
 
-    max_tokens: int = getattr(args, "max_tokens", None) or settings.max_new_tokens
-    temperature: float = getattr(args, "temperature", None) or settings.temperature
-    top_p: float = getattr(args, "top_p", None) or settings.top_p
+    max_tokens_arg = getattr(args, "max_tokens", None)
+    temperature_arg = getattr(args, "temperature", None)
+    top_p_arg = getattr(args, "top_p", None)
+
+    max_tokens: int = max_tokens_arg if max_tokens_arg is not None else settings.max_new_tokens
+    temperature: float = temperature_arg if temperature_arg is not None else settings.temperature
+    top_p: float = top_p_arg if top_p_arg is not None else settings.top_p
     use_color: bool = not getattr(args, "no_color", False)
 
     from .runner import ServerRunner
@@ -289,7 +293,20 @@ def _cmd_run(args: argparse.Namespace) -> int:  # noqa: C901
             # Colour the output manually for single-shot too.
             _print_static(full_text, use_color)
         else:
-            full_text = _print_stream(streamer, thread)
+            try:
+                full_text = _print_stream(streamer, thread)
+            except Exception as exc:
+                print(f"\nStreaming interrupted ({exc}), falling back to single-shot…", flush=True)
+                response = runner.generate_chat(
+                    messages=conversation,
+                    model_id=args.model,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    suppress_output=True,
+                )
+                full_text = response["completion_text"]
+                _print_static(full_text, use_color)
 
         conversation.append({"role": "assistant", "content": full_text})
 
