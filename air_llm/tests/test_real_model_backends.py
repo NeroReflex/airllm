@@ -144,6 +144,41 @@ class TestRealModelBackends(unittest.TestCase):
         self.assertIsInstance(out, str)
         self.assertGreater(len(out), 0)
 
+    def test_minimax_m25_cuda_smoke(self):
+        _ensure_cuda_or_skip(self)
+        _ensure_env_enabled_or_skip(
+            self,
+            "AIRLLM_RUN_MINIMAX_M25",
+            "This smoke test is intentionally gated because first run may require large model setup "
+            "and sustained free VRAM for layer streaming.",
+        )
+
+        model = AutoModel.from_pretrained(
+            "MiniMaxAI/MiniMax-M2.5",
+            device="cuda:0",
+            max_seq_len=64,
+            prefetching=False,
+            layers_per_batch=1,
+        )
+
+        self.assertEqual(type(model).__name__, "AirLLMMinimax")
+
+        toks = model.tokenizer(
+            ["Reply with one short word."],
+            return_tensors="pt",
+            truncation=True,
+            max_length=32,
+        )
+        out = model.generate(
+            toks["input_ids"].to("cuda:0"),
+            max_new_tokens=1,
+            use_cache=False,
+        )
+        decoded = model.tokenizer.decode(out[0], skip_special_tokens=True)
+
+        self.assertIsInstance(decoded, str)
+        self.assertGreater(len(decoded.strip()), 0)
+
     def test_qwen35_27b_cuda_smoke(self):
         _ensure_cuda_or_skip(self)
         _ensure_env_enabled_or_skip(
