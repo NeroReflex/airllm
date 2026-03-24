@@ -1,5 +1,7 @@
 import argparse
 import json
+import os
+import subprocess
 import sys
 import uvicorn
 
@@ -315,9 +317,75 @@ def _print_static(text: str, use_color: bool) -> None:
     sys.stdout.flush()
 
 
+def _is_minimax_model(model_id: str | None) -> bool:
+    if not model_id:
+        return False
+    return "minimax" in model_id.lower()
+
+
+def _maybe_reexec_with_minimax_runtime(
+    args: argparse.Namespace,
+    original_argv: list[str],
+) -> int | None:
+    """Route MiniMax models to an optional dedicated python runtime.
+
+    This allows using the latest transformers in the main AirLLM environment,
+    while MiniMax runs in a separate runtime pinned to the recommended
+    transformers version.
+    """
+    if getattr(args, "command", None) not in ("run", "serve"):
+        return None
+
+    model_id = getattr(args, "model", None)
+    if args.command == "serve" and not model_id:
+        model_id = Settings().model_id
+
+    if not _is_minimax_model(model_id):
+        return None
+
+    # Guard against recursion when already running in the dedicated runtime.
+    if os.environ.get("AIRLLM_MINIMAX_RUNTIME_ACTIVE") == "1":
+        return None
+
+    try:
+        import transformers
+        transformers_version = transformers.__version__
+    except Exception:
+        transformers_version = "unknown"
+
+    # MiniMax upstream currently validates against transformers 4.57.1.
+    if transformers_version.startswith("4.57.1"):
+        return None
+
+    minimax_python = os.environ.get("AIRLLM_MINIMAX_PYTHON", "").strip()
+    if not minimax_python:
+        print(
+            "MiniMax runtime requires a dedicated python with transformers==4.57.1.\n"
+            "Set AIRLLM_MINIMAX_PYTHON to that interpreter path and rerun.\n"
+            f"Current transformers version: {transformers_version}",
+            file=sys.stderr,
+        )
+        return 1
+
+    env = os.environ.copy()
+    env["AIRLLM_MINIMAX_RUNTIME_ACTIVE"] = "1"
+    cmd = [minimax_python, "-m", "airllm.server.cli", *original_argv]
+    print(
+        f"[airllm] launching MiniMax with dedicated runtime: {minimax_python}",
+        file=sys.stderr,
+    )
+    completed = subprocess.run(cmd, env=env)
+    return completed.returncode
+
+
 def main(argv: list[str] | None = None) -> int:
+    original_argv = list(argv) if argv is not None else sys.argv[1:]
     parser: argparse.ArgumentParser = _build_parser()
-    args: argparse.Namespace = parser.parse_args(argv)
+    args: argparse.Namespace = parser.parse_args(original_argv)
+
+    reexec_code = _maybe_reexec_with_minimax_runtime(args, original_argv)
+    if reexec_code is not None:
+        return reexec_code
 
     if args.command == "serve":
         return _cmd_serve(args)
