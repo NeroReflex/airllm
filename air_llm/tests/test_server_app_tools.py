@@ -48,6 +48,7 @@ class TestChatCompletionsToolSupport(unittest.TestCase):
             "created": 123,
             "model": "MiniMaxAI/MiniMax-M2.5",
             "completion_text": "",
+            "reasoning_content": "thinking",
             "tool_calls": [
                 {
                     "id": "call_1",
@@ -97,6 +98,7 @@ class TestChatCompletionsToolSupport(unittest.TestCase):
 
         self.assertEqual(payload["choices"][0]["finish_reason"], "tool_calls")
         self.assertIsNone(payload["choices"][0]["message"]["content"])
+        self.assertEqual(payload["choices"][0]["message"]["reasoning_content"], "thinking")
         self.assertEqual(payload["choices"][0]["message"]["tool_calls"][0]["function"]["name"], "get_weather")
 
         self.runner.generate_chat.assert_called_once()
@@ -110,6 +112,7 @@ class TestChatCompletionsToolSupport(unittest.TestCase):
             "created": 123,
             "model": "MiniMaxAI/MiniMax-M2.5",
             "completion_text": "",
+            "reasoning_content": "thinking",
             "tool_calls": [
                 {
                     "id": "call_1",
@@ -148,6 +151,7 @@ class TestChatCompletionsToolSupport(unittest.TestCase):
         first = json.loads(first_payload)
         choice = first["choices"][0]
         self.assertEqual(choice["finish_reason"], "tool_calls")
+        self.assertEqual(choice["delta"]["reasoning_content"], "thinking")
         self.assertIn("tool_calls", choice["delta"])
         self.assertEqual(choice["delta"]["tool_calls"][0]["function"]["name"], "search")
 
@@ -157,6 +161,7 @@ class TestChatCompletionsToolSupport(unittest.TestCase):
             "created": 123,
             "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
             "completion_text": "hello",
+            "reasoning_content": None,
             "tool_calls": [],
             "finish_reason": "stop",
             "usage": {

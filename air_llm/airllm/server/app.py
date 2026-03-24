@@ -106,6 +106,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     async def stream_chat(data: dict[str, Any]) -> AsyncGenerator[bytes, None]:
         delta: dict[str, Any] = {"role": "assistant", "content": data["completion_text"]}
+        if data.get("reasoning_content"):
+            delta["reasoning_content"] = data["reasoning_content"]
         if data.get("tool_calls"):
             delta["tool_calls"] = data["tool_calls"]
         chunk = {
@@ -190,6 +192,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "message": {
                         "role": "assistant",
                         "content": response["completion_text"] or None,
+                        "reasoning_content": response.get("reasoning_content") or None,
                         "tool_calls": response.get("tool_calls") or None,
                     },
                     "finish_reason": response.get("finish_reason", "stop"),

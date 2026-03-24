@@ -17,6 +17,7 @@ else:
         "AirLLMChatGLM": (".airllm_chatglm", "AirLLMChatGLM"),
         "AirLLMGLM4": (".airllm_glm4", "AirLLMGLM4"),
         "AirLLMGPTOss": (".airllm_gpt_oss", "AirLLMGPTOss"),
+        "AirLLMMinimax": (".airllm_minimax", "AirLLMMinimax"),
         "AirLLMDeepseekV3": (".airllm_deepseek_v3", "AirLLMDeepseekV3"),
         "AirLLMQWen": (".airllm_qwen", "AirLLMQWen"),
         "AirLLMQWen2": (".airllm_qwen2", "AirLLMQWen2"),

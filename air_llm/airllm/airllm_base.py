@@ -54,6 +54,95 @@ except ImportError:
 class AirLLMBaseModel(GenerationMixin):
     _is_stateful = False
 
+    def _ensure_transformers_dynamic_compat(self):
+        """Backfill helpers expected by some trust_remote_code model files.
+
+        Newer remote model implementations (including MiniMax M2) import
+        ``OutputRecorder`` / ``check_model_inputs`` from
+        ``transformers.utils.generic``. Some local transformers builds do not
+        expose these symbols yet, which breaks dynamic module loading.
+        """
+        try:
+            from transformers.utils import generic as transformers_generic
+        except Exception:
+            return
+
+        if not hasattr(transformers_generic, "OutputRecorder"):
+            class OutputRecorder:  # noqa: D401 - compatibility shim
+                def __init__(self, *args, **kwargs):
+                    self.args = args
+                    self.kwargs = kwargs
+
+            transformers_generic.OutputRecorder = OutputRecorder
+
+        if not hasattr(transformers_generic, "check_model_inputs"):
+            def check_model_inputs(fn=None, *args, **kwargs):
+                if fn is None:
+                    def decorator(inner_fn):
+                        return inner_fn
+                    return decorator
+                return fn
+
+            transformers_generic.check_model_inputs = check_model_inputs
+
+        try:
+            from transformers import modeling_rope_utils
+        except Exception:
+            return
+
+        if "default" not in modeling_rope_utils.ROPE_INIT_FUNCTIONS:
+            def _default_rope_init(config=None, device=None, seq_len=None, layer_type=None):
+                if config is None:
+                    raise ValueError("config is required for default rope init")
+
+                # Mirrors the classic RoPE inverse-frequency computation used by
+                # older Llama-family implementations.
+                dim = getattr(config, "rotary_dim", None)
+                if dim is None:
+                    head_dim = getattr(config, "head_dim", None)
+                    if head_dim is None:
+                        head_dim = int(config.hidden_size // config.num_attention_heads)
+                    dim = int(head_dim)
+
+                base = float(getattr(config, "rope_theta", 10000.0))
+                inv_freq = 1.0 / (
+                    base ** (
+                        torch.arange(0, dim, 2, dtype=torch.float32, device=device)
+                        / dim
+                    )
+                )
+                return inv_freq, 1.0
+
+            modeling_rope_utils.ROPE_INIT_FUNCTIONS["default"] = _default_rope_init
+
+        try:
+            from transformers import modeling_utils
+            if not getattr(modeling_utils.PreTrainedModel, "_airllm_default_rope_patch", False):
+                original_init_weights = modeling_utils.PreTrainedModel._init_weights
+
+                def _patched_init_weights(self, module):
+                    try:
+                        return original_init_weights(self, module)
+                    except AttributeError as exc:
+                        if (
+                            "compute_default_rope_parameters" in str(exc)
+                            and "RotaryEmbedding" in module.__class__.__name__
+                            and hasattr(module, "original_inv_freq")
+                        ):
+                            rope_fn = modeling_rope_utils.ROPE_INIT_FUNCTIONS.get("default")
+                            if rope_fn is None:
+                                raise
+                            buffer_value, _ = rope_fn(getattr(module, "config", None))
+                            module.inv_freq.copy_(buffer_value)
+                            module.original_inv_freq.copy_(buffer_value)
+                            return
+                        raise
+
+                modeling_utils.PreTrainedModel._init_weights = _patched_init_weights
+                modeling_utils.PreTrainedModel._airllm_default_rope_patch = True
+        except Exception:
+            return
+
     # customize layer names here
     def set_layer_names_dict(self):
         self.layer_names_dict = {'embed': 'model.embed_tokens',
@@ -216,6 +305,8 @@ class AirLLMBaseModel(GenerationMixin):
 
     def init_model(self):
 
+        self._ensure_transformers_dynamic_compat()
+
         # try way 1 better transformers...
         # Load meta model (no memory used)
         self.model = None
@@ -260,6 +351,7 @@ class AirLLMBaseModel(GenerationMixin):
 
     def _init_model_fast(self):
         """Fast model recreation using cached strategy (no trial-and-error)."""
+        self._ensure_transformers_dynamic_compat()
         if self._init_strategy == 'better_transformer':
             with init_empty_weights():
                 self.model = AutoModelForCausalLM.from_config(self.config, trust_remote_code=True)

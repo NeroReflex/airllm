@@ -431,3 +431,70 @@ class TestExtractToolCalls(unittest.TestCase):
         )
         _, tool_calls = self._parse(text)
         self.assertEqual(tool_calls[0]["function"]["arguments"], '{"query": "foo bar"}')
+
+
+class TestExtractReasoning(unittest.TestCase):
+    def _parse(self, text):
+        runner = _runner_with_tokenizer()
+        return runner._extract_reasoning_from_completion(text)
+
+    def test_no_think_block(self):
+        clean, reasoning = self._parse("hello world")
+        self.assertEqual(clean, "hello world")
+        self.assertIsNone(reasoning)
+
+    def test_single_think_block_is_split_out(self):
+        clean, reasoning = self._parse("<think>plan first</think>final answer")
+        self.assertEqual(clean, "final answer")
+        self.assertEqual(reasoning, "plan first")
+
+    def test_multiple_think_blocks_are_joined(self):
+        clean, reasoning = self._parse("<think>a</think>visible<think>b</think>")
+        self.assertEqual(clean, "visible")
+        self.assertEqual(reasoning, "a\n\nb")
+
+
+class TestGenerateChatStructuredOutput(unittest.TestCase):
+    def test_generate_chat_extracts_reasoning_and_tool_calls(self):
+        runner = _runner_with_tokenizer(tokenizer=MagicMock())
+        runner.settings.device = "cpu"
+        runner.load_model_if_needed = MagicMock(side_effect=lambda model_id=None: None)
+        runner.loaded_model_id = "MiniMaxAI/MiniMax-M2.5"
+        runner.model = MagicMock()
+        runner.effective_max_seq_len = 1024
+        runner._flatten_messages_to_prompt = MagicMock(return_value=("prompt", [], True))
+
+        toks = {
+            "input_ids": MagicMock(),
+            "attention_mask": MagicMock(),
+        }
+        toks["input_ids"].to.return_value = toks["input_ids"]
+        toks["attention_mask"].to.return_value = toks["attention_mask"]
+        toks["input_ids"].shape = (1, 3)
+        runner.tokenizer.return_value = toks
+
+        output_ids = MagicMock()
+        completion_ids = MagicMock()
+        completion_ids.shape = (5,)
+        output_ids.__getitem__.return_value = completion_ids
+        runner.model.generate.return_value = output_ids
+        runner.tokenizer.decode.return_value = (
+            "<think>reason privately</think>"
+            "visible answer\n"
+            "<minimax:tool_call><invoke name=\"search\">"
+            "<parameter name=\"query\">\"weather\"</parameter>"
+            "</invoke></minimax:tool_call>"
+        )
+
+        response = runner.generate_chat(
+            messages=[{"role": "user", "content": "hi"}],
+            model_id="MiniMaxAI/MiniMax-M2.5",
+            max_tokens=32,
+            temperature=0.0,
+            top_p=1.0,
+        )
+
+        self.assertEqual(response["completion_text"], "visible answer")
+        self.assertEqual(response["reasoning_content"], "reason privately")
+        self.assertEqual(response["finish_reason"], "tool_calls")
+        self.assertEqual(response["tool_calls"][0]["function"]["name"], "search")

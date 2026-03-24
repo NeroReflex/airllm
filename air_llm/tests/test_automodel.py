@@ -46,6 +46,7 @@ class TestAutoModel(unittest.TestCase):
             ("MllamaForConditionalGeneration", "AirLLMMllama"),
             ("SpeechT5ForTextToSpeech", "AirLLMSpeechT5"),
             ("GptOssForCausalLM", "AirLLMGPTOss"),
+            ("MiniMaxM2ForCausalLM", "AirLLMMinimax"),
             ("LlamaForCausalLM", "AirLLMLlama2"),
         ]
 
@@ -131,3 +132,27 @@ class TestAirLLMGPTOss(unittest.TestCase):
         got_cos, got_sin = result["position_embeddings"]
         self.assertEqual(got_cos.shape, (1, 4, 8))
         self.assertEqual(got_sin.shape, (1, 4, 8))
+
+
+class TestAirLLMMinimax(unittest.TestCase):
+    def _bare(self):
+        from ..airllm.airllm_minimax import AirLLMMinimax
+
+        return object.__new__(AirLLMMinimax)
+
+    def test_layer_names_dict(self):
+        obj = self._bare()
+        obj.set_layer_names_dict()
+        self.assertEqual(obj.layer_names_dict["embed"], "model.embed_tokens")
+        self.assertEqual(obj.layer_names_dict["layer_prefix"], "model.layers")
+        self.assertEqual(obj.layer_names_dict["norm"], "model.norm")
+        self.assertEqual(obj.layer_names_dict["lm_head"], "lm_head")
+
+    def test_get_use_better_transformer_returns_false(self):
+        obj = self._bare()
+        self.assertFalse(obj.get_use_better_transformer())
+
+    def test_generation_config_is_constructible(self):
+        obj = self._bare()
+        config = obj.get_generation_config()
+        self.assertIsNotNone(config)

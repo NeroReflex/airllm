@@ -44,6 +44,8 @@ class AutoModel:
 
         if "GptOssForCausalLM" in arch:
             return "airllm", "AirLLMGPTOss"
+        elif "MiniMaxM2ForCausalLM" in arch:
+            return "airllm", "AirLLMMinimax"
         elif "DeepseekV3ForCausalLM" in arch:
             return "airllm", "AirLLMDeepseekV3"
         # Qwen3 MoE variants (check before Qwen2/Qwen to avoid prefix matches)

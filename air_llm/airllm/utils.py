@@ -318,6 +318,10 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
 
     for layer in tqdm(layers):
 
+        marker_exists = ModelPersister.get_model_persister().model_persist_exist(layer, saving_path)
+        if marker_exists:
+            continue
+
         # Optionnally load next shard
         # checking whether after spliting from '-', if second element exists. otherwise it throws errors for single 'model.safetensor' files
         shards = [int(v.split('-')[1]) for k, v in index.items() if k.startswith(layer) and '-' in v and len(v.split('-')) > 1]
@@ -379,9 +383,7 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
 
         # Save layer state dict as using safetensors
 
-        marker_exists = ModelPersister.get_model_persister().model_persist_exist(layer, saving_path)
-        if not marker_exists:
-            ModelPersister.get_model_persister().persist_model(layer_state_dict, layer, saving_path)
+        ModelPersister.get_model_persister().persist_model(layer_state_dict, layer, saving_path)
 
         # Free memory
         for k in layer_state_dict.keys():

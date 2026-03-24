@@ -297,6 +297,17 @@ class ServerRunner:
         cleaned = block_re.sub("", completion or "").strip()
         return cleaned, tool_calls
 
+    def _extract_reasoning_from_completion(
+        self,
+        completion: str,
+    ) -> tuple[str, str | None]:
+        think_re = re.compile(r"<think>(.*?)</think>", re.DOTALL)
+
+        reasoning_chunks = [chunk.strip() for chunk in think_re.findall(completion or "")]
+        cleaned = think_re.sub("", completion or "").strip()
+        reasoning = "\n\n".join(chunk for chunk in reasoning_chunks if chunk)
+        return cleaned, reasoning or None
+
     # ------------------------------------------------------------------
     # Image helpers
     # ------------------------------------------------------------------
@@ -430,6 +441,7 @@ class ServerRunner:
             completion_tokens = int(completion_ids.shape[-1])
 
         clean_text, tool_calls = self._extract_tool_calls_from_completion(completion)
+        clean_text, reasoning_content = self._extract_reasoning_from_completion(clean_text)
         finish_reason = "tool_calls" if tool_calls else "stop"
 
         return {
@@ -438,6 +450,7 @@ class ServerRunner:
             "created": int(time.time()),
             "model": self.loaded_model_id,
             "completion_text": clean_text,
+            "reasoning_content": reasoning_content,
             "tool_calls": tool_calls,
             "finish_reason": finish_reason,
             "usage": {

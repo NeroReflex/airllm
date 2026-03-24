@@ -9,9 +9,10 @@ import os
 import tempfile
 import shutil
 import unittest
+from unittest.mock import patch
 
 import torch
-from safetensors.torch import save_file
+from safetensors.torch import load_file, save_file
 
 
 class TestSingleFileModelSplit(unittest.TestCase):
@@ -47,6 +48,11 @@ class TestSingleFileModelSplit(unittest.TestCase):
         state = self._make_fake_model_state()
         del state["lm_head.weight"]
         return state
+
+    def _touch_done_marker(self, split_path, layer_prefix):
+        shard_path = os.path.join(split_path, f"{layer_prefix}.safetensors")
+        save_file({f"{layer_prefix}.weight": torch.randn(1)}, shard_path)
+        open(shard_path + ".done", "a", encoding="utf-8").close()
 
     # ------------------------------------------------------------------
     # single model.safetensors (no index)
@@ -167,6 +173,57 @@ class TestSingleFileModelSplit(unittest.TestCase):
             self.assertTrue(
                 os.path.exists(os.path.join(split_path, fname)),
                 f"Expected output shard missing: {fname}",
+            )
+
+    # ------------------------------------------------------------------
+    # interrupted split resumes from missing layer instead of replaying
+    # earlier shards
+    # ------------------------------------------------------------------
+    def test_resume_partial_split_skips_completed_layers(self):
+        shard1_state = {
+            "model.embed_tokens.weight": torch.randn(100, 64),
+            "model.layers.0.input_layernorm.weight": torch.randn(64),
+        }
+        shard2_state = {
+            "model.layers.1.input_layernorm.weight": torch.randn(64),
+            "model.norm.weight": torch.randn(64),
+            "lm_head.weight": torch.randn(100, 64),
+        }
+        shard1 = "model-00001-of-00002.safetensors"
+        shard2 = "model-00002-of-00002.safetensors"
+        save_file(shard1_state, os.path.join(self.tmpdir, shard1))
+        save_file(shard2_state, os.path.join(self.tmpdir, shard2))
+
+        weight_map = {k: shard1 for k in shard1_state}
+        weight_map.update({k: shard2 for k in shard2_state})
+        index = {"metadata": {}, "weight_map": weight_map}
+        with open(os.path.join(self.tmpdir, "model.safetensors.index.json"), "w") as f:
+            json.dump(index, f)
+
+        split_path = os.path.join(self.tmpdir, "splitted_model")
+        os.makedirs(split_path, exist_ok=True)
+        self._touch_done_marker(split_path, "model.embed_tokens")
+        self._touch_done_marker(split_path, "model.layers.0")
+
+        loaded_paths = []
+
+        def recording_load_file(path, device="cpu"):
+            loaded_paths.append(os.path.basename(str(path)))
+            return load_file(path, device=device)
+
+        with patch("airllm.utils.load_file", side_effect=recording_load_file):
+            from airllm.utils import split_and_save_layers
+            split_and_save_layers(self.tmpdir)
+
+        self.assertEqual(loaded_paths, [shard2])
+        for fname in (
+            "model.layers.1.safetensors",
+            "model.norm.safetensors",
+            "lm_head.safetensors",
+        ):
+            self.assertTrue(
+                os.path.exists(os.path.join(split_path, fname)),
+                f"Expected resumed split output missing: {fname}",
             )
 
     # ------------------------------------------------------------------
