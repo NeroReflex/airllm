@@ -3,7 +3,6 @@ FROM nvidia/cuda:13.0.0-runtime-ubuntu24.04
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
     VIRTUAL_ENV=/opt/venv \
     PATH=/opt/venv/bin:$PATH \
     NVIDIA_VISIBLE_DEVICES=all \
@@ -27,17 +26,21 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
-    python3-pip \
     python3-venv \
+    curl \
     ca-certificates \
     git \
     && rm -rf /var/lib/apt/lists/*
 
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+
+ENV PATH=/root/.local/bin:$PATH
+
 COPY air_llm /app/air_llm
 
-RUN python3 -m venv /opt/venv && \
-    /opt/venv/bin/pip install --upgrade pip setuptools wheel && \
-    /opt/venv/bin/pip install ./air_llm
+RUN uv python install 3.13 && \
+    uv venv --python 3.13 /opt/venv && \
+    uv pip install --python /opt/venv/bin/python ./air_llm
 
 EXPOSE 8000
 
