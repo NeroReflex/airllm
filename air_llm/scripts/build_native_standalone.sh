@@ -34,6 +34,8 @@ mkdir -p "${OUT_DIR}"
   --onefile \
   --assume-yes-for-downloads \
   --module-parameter=torch-disable-jit=no \
+  --disable-plugin=transformers \
+  --include-package=transformers \
   --output-dir="${OUT_DIR}" \
   --output-filename="airllm" \
   "${ROOT_DIR}/airllm_server.py"
