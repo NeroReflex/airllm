@@ -37,7 +37,7 @@ directml = ["torch-directml; sys_platform == 'win32' and python_version < '3.13'
 # Apple Silicon (MLX backend)
 macos = ["mlx; sys_platform == 'darwin'"]
 # Development, testing, and native compilation
-dev = ["pytest>=7", "nuitka>=1.8"]
+dev = ["pytest>=7", "nuitka[onefile]>=1.8"]
 
 [tool.setuptools.packages.find]
 where = ["."]

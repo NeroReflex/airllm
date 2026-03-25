@@ -25,7 +25,7 @@ jobs:
       - name: Install build dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install nuitka ordered-set zstandard
+          python -m pip install "nuitka[onefile]>=1.8"
           python -m pip install -e ./air_llm
 
       - name: Build standalone binary

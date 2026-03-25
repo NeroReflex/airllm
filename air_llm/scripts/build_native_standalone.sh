@@ -14,6 +14,11 @@ if [[ ! -x "${PYTHON_BIN}" ]]; then
   exit 1
 fi
 
+if ! "${PYTHON_BIN}" -c 'import nuitka, zstandard' >/dev/null 2>&1; then
+  echo "Installing build dependency: nuitka[onefile]" >&2
+  "${PYTHON_BIN}" -m pip install --upgrade "nuitka[onefile]>=1.8"
+fi
+
 PY_VERSION="$("${PYTHON_BIN}" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
 if [[ "${PY_VERSION}" != "3.13" && "${AIRLLM_ALLOW_EXPERIMENTAL_PYTHON:-0}" != "1" ]]; then
   echo "Full standalone Nuitka builds are pinned to Python 3.13 for stability." >&2
