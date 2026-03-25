@@ -9,8 +9,11 @@ from .config import Settings
 from .model_store import ModelStore
 
 # ANSI colour codes for the run command output.
+_ANSI_SYSTEM = "\033[2;33m"  # dim yellow
+_ANSI_USER = "\033[1;32m"    # bright green
+_ANSI_AI = "\033[1;34m"      # bright blue
 _ANSI_THINK = "\033[2;36m"   # dim cyan  – thinking / <think> content
-_ANSI_ANSWER = "\033[0;97m"  # bright white – final answer
+_ANSI_ANSWER = _ANSI_AI
 _ANSI_RESET = "\033[0m"
 
 
@@ -66,6 +69,11 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--max-tokens", type=int, default=None, help="Max new tokens per reply")
     run.add_argument("--temperature", type=float, default=None, help="Sampling temperature")
     run.add_argument("--top-p", type=float, default=None, help="Top-p sampling")
+    run.add_argument(
+        "--system",
+        default=None,
+        help="Override system prompt for this run session",
+    )
     run.add_argument(
         "--no-color",
         action="store_true",
@@ -150,6 +158,52 @@ def _cmd_run(args: argparse.Namespace) -> int:  # noqa: C901
     import re
     import threading
 
+    def role_label(role: str, use_color_local: bool) -> str:
+        role_l = role.lower()
+        if not use_color_local:
+            return f"{role_l}> "
+        if role_l == "system":
+            return f"{_ANSI_SYSTEM}system>{_ANSI_RESET} "
+        if role_l == "assistant":
+            return f"{_ANSI_AI}assistant>{_ANSI_RESET} "
+        return f"{_ANSI_USER}user>{_ANSI_RESET} "
+
+    def user_input_prompt(use_color_local: bool) -> str:
+        if not use_color_local:
+            return "user> "
+        # Keep input text green while the user types, then reset afterwards.
+        return f"{_ANSI_USER}user> "
+
+    def maybe_strip_prefill(text: str) -> str:
+        """Drop model-echoed chat scaffold prefixes often seen in some templates."""
+        lowered = text.lower()
+        markers = ["\nassistant\n", "\nassistant:\n", "\nassistant:", "assistant\n", "assistant:"]
+        cut_idx = -1
+        cut_len = 0
+        for marker in markers:
+            i = lowered.rfind(marker)
+            if i > cut_idx:
+                cut_idx = i
+                cut_len = len(marker)
+        if cut_idx >= 0:
+            return text[cut_idx + cut_len :]
+
+        # If explicit role headings are present but assistant start is not yet
+        # visible, hold a short buffer window to avoid showing template prefill.
+        role_tokens = (
+            "\nsystem\n",
+            "\nuser\n",
+            "\nassistant\n",
+            "system\n",
+            "user\n",
+            "system:",
+            "user:",
+            "assistant:",
+        )
+        if any(tok in lowered for tok in role_tokens) and len(text) < 400:
+            return ""
+        return text
+
     settings = Settings()
     if getattr(args, "hf_token", None):
         settings.hf_token = args.hf_token
@@ -183,13 +237,12 @@ def _cmd_run(args: argparse.Namespace) -> int:  # noqa: C901
         state = "answer"
         buffer = ""   # partial tag accumulator
         full_text = ""
+        prefill_buffer = ""
+        prefill_done = False
+        printed_assistant_label = False
 
         in_think_re = re.compile(r"<think>", re.IGNORECASE)
         out_think_re = re.compile(r"</think>", re.IGNORECASE)
-
-        # Print the initial color for the answer region.
-        sys.stdout.write(answer_start)
-        sys.stdout.flush()
 
         try:
             for token in streamer:
@@ -238,6 +291,21 @@ def _cmd_run(args: argparse.Namespace) -> int:  # noqa: C901
                                 buffer = ""
 
                 if output:
+                    if not prefill_done:
+                        prefill_buffer += output
+                        cleaned = maybe_strip_prefill(prefill_buffer)
+                        if cleaned:
+                            output = cleaned
+                            prefill_done = True
+                            prefill_buffer = ""
+                        else:
+                            output = ""
+
+                if output:
+                    if not printed_assistant_label:
+                        sys.stdout.write(role_label("assistant", use_color))
+                        sys.stdout.write(answer_start)
+                        printed_assistant_label = True
                     sys.stdout.write(output)
                     sys.stdout.flush()
         finally:
@@ -245,20 +313,41 @@ def _cmd_run(args: argparse.Namespace) -> int:  # noqa: C901
 
         # Flush remaining buffer (incomplete tag at EOF).
         if buffer:
+            if not printed_assistant_label:
+                sys.stdout.write(role_label("assistant", use_color))
+                sys.stdout.write(answer_start)
+                printed_assistant_label = True
             sys.stdout.write(buffer)
+        elif prefill_buffer and not prefill_done:
+            cleaned = maybe_strip_prefill(prefill_buffer)
+            if cleaned:
+                if not printed_assistant_label:
+                    sys.stdout.write(role_label("assistant", use_color))
+                    sys.stdout.write(answer_start)
+                    printed_assistant_label = True
+                sys.stdout.write(cleaned)
         sys.stdout.write(answer_end + "\n")
         sys.stdout.flush()
-        return full_text
+        cleaned_full = maybe_strip_prefill(full_text)
+        return cleaned_full if cleaned_full else full_text
 
     print(f"Loading {args.model} …", flush=True)
     runner.load_model_if_needed(args.model)
     print(f"Model ready. Type your message and press Enter. Use /bye or Ctrl-D to quit.\n", flush=True)
 
     conversation: list[dict] = []
+    if getattr(args, "system", None):
+        system_prompt = args.system.strip()
+        if system_prompt:
+            conversation.append({"role": "system", "content": system_prompt})
+            print(f"{role_label('system', use_color)}{system_prompt}")
 
     while True:
         try:
-            user_input = input("\033[1;32m>>> \033[0m" if use_color else ">>> ").strip()
+            user_input = input(user_input_prompt(use_color)).strip()
+            if use_color:
+                sys.stdout.write(_ANSI_RESET)
+                sys.stdout.flush()
         except (EOFError, KeyboardInterrupt):
             print()
             break
@@ -289,9 +378,9 @@ def _cmd_run(args: argparse.Namespace) -> int:  # noqa: C901
                 top_p=top_p,
                 suppress_output=True,
             )
-            full_text = response["completion_text"]
+            full_text = maybe_strip_prefill(response["completion_text"])
             # Colour the output manually for single-shot too.
-            _print_static(full_text, use_color)
+            _print_static(full_text, use_color, role_label("assistant", use_color))
         else:
             try:
                 full_text = _print_stream(streamer, thread)
@@ -305,17 +394,20 @@ def _cmd_run(args: argparse.Namespace) -> int:  # noqa: C901
                     top_p=top_p,
                     suppress_output=True,
                 )
-                full_text = response["completion_text"]
-                _print_static(full_text, use_color)
+                full_text = maybe_strip_prefill(response["completion_text"])
+                _print_static(full_text, use_color, role_label("assistant", use_color))
 
         conversation.append({"role": "assistant", "content": full_text})
 
     return 0
 
 
-def _print_static(text: str, use_color: bool) -> None:
+def _print_static(text: str, use_color: bool, assistant_label: str = "") -> None:
     """Print a complete response string with think/answer colouring."""
     import re
+
+    if assistant_label:
+        sys.stdout.write(assistant_label)
 
     if not use_color:
         print(text)
