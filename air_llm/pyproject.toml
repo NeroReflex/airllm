@@ -8,7 +8,7 @@ version = "2.12.0"
 description = "AirLLM: run 70B LLMs on a single 4GB GPU without quantization, distillation, or pruning."
 readme = "README.md"
 license = { text = "Apache-2.0" }
-requires-python = ">=3.9"
+requires-python = ">=3.13"
 dependencies = [
     "torch>=2.10",
     "transformers>=5.3",
