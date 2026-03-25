@@ -22,6 +22,7 @@ dependencies = [
     "fastapi>=0.111",
     "uvicorn>=0.30",
     "requests>=2.31",
+    "kernels",  # Required for GPT-OSS model support (MXFP4 expert kernels)
 ]
 
 [project.scripts]
@@ -31,14 +32,12 @@ airllm-server = "airllm.server.cli:main"
 [project.optional-dependencies]
 # 4-bit / 8-bit block-wise quantization (NVIDIA GPU only)
 compression = ["bitsandbytes>=0.49"]
-# GPT-OSS / MXFP4 expert kernels
-gpt-oss = ["kernels"]
 # Intel / AMD integrated GPU on Windows
 directml = ["torch-directml; sys_platform == 'win32' and python_version < '3.13'"]
 # Apple Silicon (MLX backend)
 macos = ["mlx; sys_platform == 'darwin'"]
-# Testing
-dev = ["pytest>=7"]
+# Development, testing, and native compilation
+dev = ["pytest>=7", "nuitka>=1.8"]
 
 [tool.setuptools.packages.find]
 where = ["."]

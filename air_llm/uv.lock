@@ -33,6 +33,7 @@ dependencies = [
     { name = "accelerate" },
     { name = "fastapi" },
     { name = "huggingface-hub" },
+    { name = "kernels" },
     { name = "pillow" },
     { name = "requests" },
     { name = "safetensors" },
@@ -50,10 +51,8 @@ compression = [
     { name = "bitsandbytes" },
 ]
 dev = [
+    { name = "nuitka" },
     { name = "pytest" },
-]
-gpt-oss = [
-    { name = "kernels" },
 ]
 macos = [
     { name = "mlx", marker = "sys_platform == 'darwin'" },
@@ -65,8 +64,9 @@ requires-dist = [
     { name = "bitsandbytes", marker = "extra == 'compression'", specifier = ">=0.49" },
     { name = "fastapi", specifier = ">=0.111" },
     { name = "huggingface-hub", specifier = ">=1.7" },
-    { name = "kernels", marker = "extra == 'gpt-oss'" },
+    { name = "kernels" },
     { name = "mlx", marker = "sys_platform == 'darwin' and extra == 'macos'" },
+    { name = "nuitka", marker = "extra == 'dev'", specifier = ">=1.8" },
     { name = "pillow", specifier = ">=10" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7" },
     { name = "requests", specifier = ">=2.31" },
@@ -80,7 +80,7 @@ requires-dist = [
     { name = "transformers", specifier = ">=5.3" },
     { name = "uvicorn", specifier = ">=0.30" },
 ]
-provides-extras = ["compression", "gpt-oss", "directml", "macos", "dev"]
+provides-extras = ["compression", "directml", "macos", "dev"]
 
 [[package]]
 name = "annotated-doc"
@@ -568,6 +568,12 @@ sdist = { url = "https://files.pythonhosted.org/packages/6a/51/63fe664f3908c97be
 wheels = [
     { url = "https://files.pythonhosted.org/packages/9e/c9/b2622292ea83fbb4ec318f5b9ab867d0a28ab43c5717bb85b0a5f6b3b0a4/networkx-3.6.1-py3-none-any.whl", hash = "sha256:d47fbf302e7d9cbbb9e2555a0d267983d2aa476bac30e90dfbe5669bd57f3762", size = 2068504, upload-time = "2025-12-08T17:02:38.159Z" },
 ]
+
+[[package]]
+name = "nuitka"
+version = "4.0.7"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ed/0e/2537066db2458843e4a1edfc524409069ad58a456fc4b312b18b1d327431/nuitka-4.0.7.tar.gz", hash = "sha256:26543bfed6009a466ae8608bdc643add81a497e8662e4aaf157cd00aa7fd5b9f", size = 4421537, upload-time = "2026-03-24T13:26:43.368Z" }
 
 [[package]]
 name = "numpy"
