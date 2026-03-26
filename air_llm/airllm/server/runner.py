@@ -32,12 +32,21 @@ class ServerRunner:
     def _infer_max_seq_len_from_model(self, model_id: str) -> int:
         """Infer the largest practical context length from model config."""
         try:
+            config_kwargs = {}
             if self.settings.hf_token:
+                config_kwargs["token"] = self.settings.hf_token
+            try:
                 config = AutoConfig.from_pretrained(
-                    model_id, token=self.settings.hf_token, trust_remote_code=True
+                    model_id,
+                    trust_remote_code=False,
+                    **config_kwargs,
                 )
-            else:
-                config = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
+            except Exception:
+                config = AutoConfig.from_pretrained(
+                    model_id,
+                    trust_remote_code=True,
+                    **config_kwargs,
+                )
         except Exception:
             # Fallback keeps behaviour predictable when config cannot be fetched.
             return 1024

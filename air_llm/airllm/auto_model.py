@@ -28,16 +28,22 @@ class AutoModel:
         *inputs: Any,
         **kwargs: Any,
     ) -> tuple[str, str]:
+        config_kwargs = {}
         if "hf_token" in kwargs:
             print(f"using hf_token")
+            config_kwargs["token"] = kwargs["hf_token"]
+
+        try:
+            config = AutoConfig.from_pretrained(
+                pretrained_model_name_or_path,
+                trust_remote_code=False,
+                **config_kwargs,
+            )
+        except Exception:
             config = AutoConfig.from_pretrained(
                 pretrained_model_name_or_path,
                 trust_remote_code=True,
-                token=kwargs["hf_token"],
-            )
-        else:
-            config = AutoConfig.from_pretrained(
-                pretrained_model_name_or_path, trust_remote_code=True
+                **config_kwargs,
             )
 
         arch = config.architectures[0] if config.architectures else ""

@@ -19,7 +19,7 @@ Model directory naming rule:
 
 AirLLM split-layer cache location (important):
 
-- $HOME/.cache/huggingface/hub/models--<org>--<name>/snapshots/<snapshot_hash>/splitted_model
+- $HOME/.cache/huggingface/hub/models--\<org\>--\<name\>/snapshots/<snapshot_hash>/splitted_model
 
 On this machine, detected examples:
 
@@ -56,6 +56,7 @@ rsync -aH --info=progress2 "$MODEL_DIR" "$DEST"
 ```
 
 Notes:
+
 - -a preserves symlinks/permissions/timestamps.
 - -H preserves hard links if present.
 
@@ -65,8 +66,12 @@ Notes:
 # Source PC
 cd $HOME/.cache/huggingface/hub
 
+# Create a .tar.zst
 tar --numeric-owner -cpf /tmp/models--unsloth--phi-4.tar models--unsloth--phi-4
 zstd -19 -T0 /tmp/models--unsloth--phi-4.tar -o /tmp/models--unsloth--phi-4.tar.zst
+
+# Or in GZip
+tar -czf /path/to/destination/phi-4.tar.gz -C $HOME/.cache/huggingface/hub   models--unsloth--phi-4
 ```
 
 Copy /tmp/models--unsloth--phi-4.tar.zst to target machine.

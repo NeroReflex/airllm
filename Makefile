@@ -4,29 +4,73 @@ PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 DESTDIR ?=
 NATIVE_BIN := air_llm/build/native/airllm
+ROOT_DIR := air_llm
+OUT_DIR := $(ROOT_DIR)/build/native
+PYTHON_BIN ?= $(ROOT_DIR)/.venv/bin/python
 
-.PHONY: native-launcher native-standalone install-native uninstall-native release-archive
+.PHONY: all build clean install uninstall release-archive
 
-native-launcher:
-	@bash air_llm/scripts/build_native.sh
+all: build
 
-native-standalone:
-	@bash air_llm/scripts/build_native_standalone.sh
+build:
+	@set -euo pipefail; \
+	echo "Running from root directory: $(ROOT_DIR)"; \
+	echo "Using Python executable: $(PYTHON_BIN)"; \
+	if [[ ! -x "$(PYTHON_BIN)" ]]; then \
+	  echo "Python executable not found: $(PYTHON_BIN)" >&2; \
+	  exit 1; \
+	fi; \
+	if ! "$(PYTHON_BIN)" -m pip --version >/dev/null 2>&1; then \
+	  echo "Bootstrapping pip in build environment..." >&2; \
+	  "$(PYTHON_BIN)" -m ensurepip --upgrade; \
+	fi; \
+	if ! "$(PYTHON_BIN)" -c 'import nuitka, zstandard' >/dev/null 2>&1; then \
+	  echo "Installing build dependency: nuitka[onefile]" >&2; \
+	  "$(PYTHON_BIN)" -m pip install --upgrade "nuitka[onefile]>=1.8"; \
+	fi; \
+	PY_VERSION="$$($(PYTHON_BIN) -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"; \
+	if [[ "$$PY_VERSION" != "3.13" && "$${AIRLLM_ALLOW_EXPERIMENTAL_PYTHON:-0}" != "1" ]]; then \
+	  echo "Full standalone Nuitka builds are pinned to Python 3.13 for stability." >&2; \
+	  echo "Detected Python $$PY_VERSION." >&2; \
+	  echo "Use Python 3.13 or set AIRLLM_ALLOW_EXPERIMENTAL_PYTHON=1 to proceed at your own risk." >&2; \
+	  exit 2; \
+	fi; \
+	mkdir -p "$(OUT_DIR)"; \
+	"$(PYTHON_BIN)" -m nuitka \
+	  --standalone \
+	  --onefile \
+	  --assume-yes-for-downloads \
+	  --module-parameter=torch-disable-jit=no \
+	  --include-distribution-metadata=pytest \
+	  --include-distribution-metadata=kernels \
+	  --include-distribution-metadata=triton \
+	  --include-package=airllm \
+	  --include-package=kernels \
+	  --include-package=_pytest \
+	  --include-package-data=kernels \
+	  --output-dir="$(OUT_DIR)" \
+	  --output-filename="airllm" \
+	  "$(ROOT_DIR)/airllm_server.py"; \
+	echo "Standalone native executable created at $(OUT_DIR)/airllm"
 
-install-native:
-	@test -x "$(NATIVE_BIN)" || (echo "Build binary first: make native-standalone" >&2; exit 1)
+clean:
+	@rm -rf "$(OUT_DIR)/airllm" "$(OUT_DIR)/airllm.sh" "$(OUT_DIR)/airllm_server.build" "$(OUT_DIR)/airllm_server.dist" "$(OUT_DIR)/airllm_server.onefile-build"
+	@echo "Cleaned native build artifacts"
+
+install:
+	@test -x "$(NATIVE_BIN)" || (echo "Build binary first: make build" >&2; exit 1)
 	@install -d "$(DESTDIR)$(BINDIR)"
 	@install -m 0755 "$(NATIVE_BIN)" "$(DESTDIR)$(BINDIR)/airllm"
 	@echo "Installed $(DESTDIR)$(BINDIR)/airllm"
 
-uninstall-native:
+uninstall:
 	@rm -f "$(DESTDIR)$(BINDIR)/airllm"
 	@echo "Removed $(DESTDIR)$(BINDIR)/airllm"
 
 release-archive:
 	@test -n "$(VERSION)" || (echo "Set VERSION, e.g. make release-archive VERSION=v2.12.0 PLATFORM=linux-x86_64" >&2; exit 1)
 	@test -n "$(PLATFORM)" || (echo "Set PLATFORM, e.g. PLATFORM=linux-x86_64" >&2; exit 1)
-	@test -x "$(NATIVE_BIN)" || (echo "Build binary first: make native-standalone" >&2; exit 1)
+	@test -x "$(NATIVE_BIN)" || (echo "Build binary first: make build" >&2; exit 1)
 	@mkdir -p dist/package
 	@cp "$(NATIVE_BIN)" dist/package/airllm
 	@cp LICENSE dist/package/LICENSE

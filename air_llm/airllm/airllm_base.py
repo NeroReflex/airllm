@@ -150,6 +150,15 @@ class AirLLMBaseModel(GenerationMixin):
                        'norm': 'model.norm',
                        'lm_head': 'lm_head',}
 
+    def get_config_trust_remote_code(self):
+        return True
+
+    def get_tokenizer_trust_remote_code(self):
+        return True
+
+    def get_model_trust_remote_code(self):
+        return True
+
 
 
     def __init__(self, model_local_path_or_repo_id, device="cuda:0", dtype=torch.float16, max_seq_len=512,
@@ -236,9 +245,16 @@ class AirLLMBaseModel(GenerationMixin):
 
         # Create model
         if hf_token is not None:
-            self.config = AutoConfig.from_pretrained(self.model_local_path, token=hf_token, trust_remote_code=True)
+            self.config = AutoConfig.from_pretrained(
+                self.model_local_path,
+                token=hf_token,
+                trust_remote_code=self.get_config_trust_remote_code(),
+            )
         else:
-            self.config = AutoConfig.from_pretrained(self.model_local_path, trust_remote_code=True)
+            self.config = AutoConfig.from_pretrained(
+                self.model_local_path,
+                trust_remote_code=self.get_config_trust_remote_code(),
+            )
 
         self.generation_config = self.get_generation_config()
         #print(f"using generation_config: {self.generation_config}")
@@ -296,9 +312,16 @@ class AirLLMBaseModel(GenerationMixin):
     # a chance to customize tokenizer
     def get_tokenizer(self, hf_token=None):
         if hf_token is not None:
-            return AutoTokenizer.from_pretrained(self.model_local_path, token=hf_token, trust_remote_code=True)
+            return AutoTokenizer.from_pretrained(
+                self.model_local_path,
+                token=hf_token,
+                trust_remote_code=self.get_tokenizer_trust_remote_code(),
+            )
         else:
-            return AutoTokenizer.from_pretrained(self.model_local_path, trust_remote_code=True)
+            return AutoTokenizer.from_pretrained(
+                self.model_local_path,
+                trust_remote_code=self.get_tokenizer_trust_remote_code(),
+            )
 
     def get_use_better_transformer(self):
         return True
@@ -315,7 +338,10 @@ class AirLLMBaseModel(GenerationMixin):
             if bettertransformer_available:
                 try:
                     with init_empty_weights():
-                        self.model = AutoModelForCausalLM.from_config(self.config, trust_remote_code=True)
+                        self.model = AutoModelForCausalLM.from_config(
+                            self.config,
+                            trust_remote_code=self.get_model_trust_remote_code(),
+                        )
                         self.model = BetterTransformer.transform(self.model)  # enable flash attention
                     self._init_strategy = 'better_transformer'
                 except (ValueError, Exception) as ve:
@@ -331,7 +357,11 @@ class AirLLMBaseModel(GenerationMixin):
                     self.config.attn_implementation = "sdpa"
 
                     with init_empty_weights():
-                        self.model = AutoModelForCausalLM.from_config(self.config, attn_implementation="sdpa", trust_remote_code=True)
+                        self.model = AutoModelForCausalLM.from_config(
+                            self.config,
+                            attn_implementation="sdpa",
+                            trust_remote_code=self.get_model_trust_remote_code(),
+                        )
                     print(f"attn imp: {type(self.model.model.layers[3].self_attn)}")
                     self._init_strategy = 'sdpa'
 
@@ -344,7 +374,10 @@ class AirLLMBaseModel(GenerationMixin):
         if self.model is None:
             print(f"either BetterTransformer or attn_implementation='sdpa' is available, creating model directly")
             with init_empty_weights():
-                self.model = AutoModelForCausalLM.from_config(self.config, trust_remote_code=True)
+                self.model = AutoModelForCausalLM.from_config(
+                    self.config,
+                    trust_remote_code=self.get_model_trust_remote_code(),
+                )
             self._init_strategy = 'default'
 
         self._finalize_model_init()
@@ -354,14 +387,24 @@ class AirLLMBaseModel(GenerationMixin):
         self._ensure_transformers_dynamic_compat()
         if self._init_strategy == 'better_transformer':
             with init_empty_weights():
-                self.model = AutoModelForCausalLM.from_config(self.config, trust_remote_code=True)
+                self.model = AutoModelForCausalLM.from_config(
+                    self.config,
+                    trust_remote_code=self.get_model_trust_remote_code(),
+                )
                 self.model = BetterTransformer.transform(self.model)
         elif self._init_strategy == 'sdpa':
             with init_empty_weights():
-                self.model = AutoModelForCausalLM.from_config(self.config, attn_implementation="sdpa", trust_remote_code=True)
+                self.model = AutoModelForCausalLM.from_config(
+                    self.config,
+                    attn_implementation="sdpa",
+                    trust_remote_code=self.get_model_trust_remote_code(),
+                )
         else:
             with init_empty_weights():
-                self.model = AutoModelForCausalLM.from_config(self.config, trust_remote_code=True)
+                self.model = AutoModelForCausalLM.from_config(
+                    self.config,
+                    trust_remote_code=self.get_model_trust_remote_code(),
+                )
         self._finalize_model_init()
 
     def _finalize_model_init(self):
@@ -370,6 +413,17 @@ class AirLLMBaseModel(GenerationMixin):
 
         if quantization_config is not None:
             self.hf_quantizer = AutoHfQuantizer.from_config(quantization_config, pre_quantized=True)
+            # GPT-OSS MXFP4 with AirLLM streaming must stay in dequantize mode.
+            # Otherwise transformers takes the swizzle/triton-tensor path that
+            # assigns non-Parameter objects into modules and crashes at runtime.
+            try:
+                from transformers.quantizers.quantizer_mxfp4 import Mxfp4HfQuantizer
+                if isinstance(self.hf_quantizer, Mxfp4HfQuantizer):
+                    self.hf_quantizer.quantization_config.dequantize = True
+                    if hasattr(self.config, "quantization_config"):
+                        self.config.quantization_config.dequantize = True
+            except Exception:
+                pass
             device_map = self.hf_quantizer.update_device_map(None)
             self.hf_quantizer.preprocess_model(model = self.model, device_map = device_map)
 
@@ -482,6 +536,16 @@ class AirLLMBaseModel(GenerationMixin):
         """Calculate how many layers can fit in GPU memory simultaneously."""
         if not torch.cuda.is_available():
             return 1
+        # MXFP4 (GPT-OSS) checkpoints store weights as compressed blocks+scales.
+        # The on-disk size is typically 4-8x smaller than the deserialized GPU
+        # footprint, so the generic estimate below would return a dangerously
+        # large batch size and cause OOM.  Always stream one layer at a time.
+        try:
+            from transformers.quantizers.quantizer_mxfp4 import Mxfp4HfQuantizer
+            if isinstance(self.hf_quantizer, Mxfp4HfQuantizer):
+                return 1
+        except ImportError:
+            pass
         layer_bytes = self._estimate_layer_gpu_bytes()
         if layer_bytes == 0:
             return 1
@@ -498,46 +562,77 @@ class AirLLMBaseModel(GenerationMixin):
     def _move_mxfp4_params_to_device(self, state_dict):
         """Handle transformers MXFP4 pre-quantized tensors in-place.
 
-        GPT-OSS checkpoints store expert weights as `*_blocks` + `*_scales`
-        tensors. The transformers MXFP4 integration deserializes those pairs
-        into the in-memory `gate_up_proj` / `down_proj` expert parameters.
+        GPT-OSS checkpoints store expert weights as ``*_blocks`` + ``*_scales``
+        tensors.  Supports both the transformers ≥5.x fine-grained API
+        (``Mxfp4Deserialize``) and the 4.57.x legacy path
+        (``create_quantized_param``), which calls ``dequantize()`` internally
+        because ``dequantize=True`` is forced in ``AirLLMGPTOss.init_model()``.
         """
         try:
             from transformers.quantizers.quantizer_mxfp4 import Mxfp4HfQuantizer
-            from transformers.integrations.mxfp4 import Mxfp4Deserialize
         except ImportError:
             return set(), set()
 
         if self.hf_quantizer is None or not isinstance(self.hf_quantizer, Mxfp4HfQuantizer):
             return set(), set()
 
+        # ── transformers ≥5.x path ────────────────────────────────────────────
+        try:
+            from transformers.integrations.mxfp4 import Mxfp4Deserialize
+            deserializer = Mxfp4Deserialize(self.hf_quantizer)
+            handled_keys: set = set()
+            handled_params: set = set()
+            for suffix in ("gate_up_proj", "down_proj"):
+                block_suffix = f"{suffix}_blocks"
+                scale_suffix = f"{suffix}_scales"
+                for key in list(state_dict.keys()):
+                    if not key.endswith(block_suffix):
+                        continue
+                    full_layer_name = key[: -len("_blocks")]
+                    scale_key = f"{full_layer_name}_scales"
+                    if scale_key not in state_dict:
+                        continue
+                    deserializer.convert(
+                        {block_suffix: state_dict[key], scale_suffix: state_dict[scale_key]},
+                        model=self.model,
+                        full_layer_name=full_layer_name,
+                        missing_keys=set(),
+                    )
+                    handled_keys.update({key, scale_key})
+                    handled_params.add(full_layer_name)
+            return handled_keys, handled_params
+        except ImportError:
+            pass
+
+        # ── transformers 4.57.x path ──────────────────────────────────────────
+        # Use create_quantized_param, which calls dequantize() internally and
+        # produces standard nn.Parameters (blocks+scales attributes are deleted
+        # from the module after dequantisation so layer.to("meta") cleans up).
+        # Process blocks keys before scales so that the lazy swizzle/dequantize
+        # step triggers on the second call when both tensors are in GPU memory.
         handled_keys = set()
         handled_params = set()
-        deserializer = Mxfp4Deserialize(self.hf_quantizer)
-
-        for suffix in ("gate_up_proj", "down_proj"):
-            block_suffix = f"{suffix}_blocks"
-            scale_suffix = f"{suffix}_scales"
-            for key in list(state_dict.keys()):
-                if not key.endswith(block_suffix):
+        sorted_keys = sorted(
+            state_dict.keys(),
+            key=lambda k: (0 if k.endswith("_blocks") else 1),
+        )
+        for key in sorted_keys:
+            try:
+                if not self.hf_quantizer.param_needs_quantization(self.model, key):
                     continue
-                full_layer_name = key[: -len("_blocks")]
-                scale_key = f"{full_layer_name}_scales"
-                if scale_key not in state_dict:
-                    continue
-
-                deserializer.convert(
-                    {
-                        block_suffix: state_dict[key],
-                        scale_suffix: state_dict[scale_key],
-                    },
-                    model=self.model,
-                    full_layer_name=full_layer_name,
-                    missing_keys=set(),
+                self.hf_quantizer.create_quantized_param(
+                    self.model,
+                    state_dict[key],
+                    key,
+                    torch.device(self.running_device),
                 )
-                handled_keys.update({key, scale_key})
-                handled_params.add(full_layer_name)
-
+                handled_keys.add(key)
+                for sfx in ("_blocks", "_scales"):
+                    if key.endswith(sfx):
+                        handled_params.add(key[: -len(sfx)])
+                        break
+            except Exception:
+                pass  # Best-effort; unhandled keys fall through to the normal path.
         return handled_keys, handled_params
 
     def move_layer_to_device(self, state_dict):
@@ -579,20 +674,43 @@ class AirLLMBaseModel(GenerationMixin):
                                             )
             else:
                 # Weights are already quantized (uint8 + quant_state metadata).
-                # Reconstruct Params4bit directly instead of re-quantizing.
+                # Reconstruct Params4bit directly instead of re-quantizing when
+                # bitsandbytes metadata is present. Other quantizers (e.g.
+                # transformers MXFP4) should use their own create_quantized_param
+                # path instead of going through bnb QuantState.
                 quant_state_dict = {k[len(param_name) + 1:]: v for k, v in state_dict.items()
                                     if k.startswith(param_name + ".") and k != param_name}
-                quant_state = bnb.functional.QuantState.from_dict(qs_dict=quant_state_dict, device=self.running_device)
-                new_value = bnb.nn.Params4bit(state_dict[param_name].to(self.running_device),
-                                              requires_grad=False,
-                                              quant_state=quant_state,
-                                              bnb_quantized=True)
-                # Set directly on module to avoid accelerate re-creating Params4bit
-                parts = param_name.split(".")
-                module = self.model
-                for part in parts[:-1]:
-                    module = getattr(module, part)
-                setattr(module, parts[-1], new_value)
+                if quant_state_dict:
+                    quant_state = bnb.functional.QuantState.from_dict(
+                        qs_dict=quant_state_dict,
+                        device=self.running_device,
+                    )
+                    new_value = bnb.nn.Params4bit(
+                        state_dict[param_name].to(self.running_device),
+                        requires_grad=False,
+                        quant_state=quant_state,
+                        bnb_quantized=True,
+                    )
+                    # Set directly on module to avoid accelerate re-creating Params4bit
+                    parts = param_name.split(".")
+                    module = self.model
+                    for part in parts[:-1]:
+                        module = getattr(module, part)
+                    setattr(module, parts[-1], new_value)
+                else:
+                    # Ensure MXFP4 quantizer stays in dequantize mode for streaming.
+                    try:
+                        from transformers.quantizers.quantizer_mxfp4 import Mxfp4HfQuantizer
+                        if isinstance(self.hf_quantizer, Mxfp4HfQuantizer):
+                            self.hf_quantizer.quantization_config.dequantize = True
+                    except Exception:
+                        pass
+                    self.hf_quantizer.create_quantized_param(
+                        self.model,
+                        state_dict[param_name],
+                        param_name,
+                        torch.device(self.running_device),
+                    )
         return layers
 
     # make GenerationMixin happy
@@ -768,11 +886,14 @@ class AirLLMBaseModel(GenerationMixin):
         batch = [input_ids_unit.to(self.running_device).unsqueeze(0) for input_ids_unit in input_ids]
         n_seq = len(batch[0])
 
-        # Create attention mask for the largest input, and position ids to use KV cache
-        attention_mask = torch.ones(self.max_seq_len, self.max_seq_len)
+        # Build masks only for the sequence length actually being processed.
+        # Using self.max_seq_len here causes catastrophic OOM for large-context
+        # models (for example 128k GPT-OSS) even when the prompt itself is short.
+        current_seq_len = max(self.get_sequence_len(seq) for seq in batch)
+        attention_mask = torch.ones(current_seq_len, current_seq_len)
         attention_mask = attention_mask.triu(diagonal=1)[None, None, ...] == 0
         attention_mask = attention_mask.to(self.running_device)
-        position_ids = torch.arange(self.max_seq_len, dtype=torch.long, device=self.running_device)[None, :]
+        position_ids = torch.arange(current_seq_len, dtype=torch.long, device=self.running_device)[None, :]
 
         # Check if we need to compute position embeddings for new transformers versions
         self._rotary_emb = None
@@ -1017,28 +1138,37 @@ class AirLLMBaseModel(GenerationMixin):
                         for param_name in all_moved_layers[offset]:
                             try:
                                 set_module_tensor_to_device(self.model, param_name, 'meta')
-                            except ValueError:
+                            except Exception:
                                 # Some quantized integrations (notably MXFP4 GPT-OSS)
-                                # materialize tensors in-place on custom expert
-                                # modules that accelerate cannot evict back to meta.
-                                parts = param_name.split('.')
-                                module = self.model
-                                for part in parts[:-1]:
-                                    module = getattr(module, part)
-                                tensor = getattr(module, parts[-1], None)
-                                if tensor is not None:
-                                    meta_tensor = torch.empty(
-                                        tuple(tensor.shape),
-                                        device=torch.device('meta'),
-                                    )
-                                    setattr(
-                                        module,
-                                        parts[-1],
-                                        torch.nn.Parameter(
-                                            meta_tensor,
-                                            requires_grad=False,
-                                        ),
-                                    )
+                                # store deserialized weights on submodules rather than
+                                # as flat parameters, so set_module_tensor_to_device
+                                # cannot evict them.  Try a best-effort path-based
+                                # cleanup; if that also fails, layer.to("meta") below
+                                # handles the full eviction unconditionally.
+                                try:
+                                    parts = param_name.split('.')
+                                    module = self.model
+                                    for part in parts[:-1]:
+                                        module = getattr(module, part)
+                                    attr = getattr(module, parts[-1], None)
+                                    if attr is not None:
+                                        if isinstance(attr, torch.nn.Module):
+                                            attr.to('meta')
+                                        else:
+                                            meta_t = torch.empty(
+                                                tuple(attr.shape),
+                                                device=torch.device('meta'),
+                                            )
+                                            setattr(
+                                                module,
+                                                parts[-1],
+                                                torch.nn.Parameter(
+                                                    meta_t,
+                                                    requires_grad=False,
+                                                ),
+                                            )
+                                except Exception:
+                                    pass
                     else:
                         layer.to("meta")
                     layer.to("meta")

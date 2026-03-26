@@ -88,6 +88,29 @@ class TestAirLLMGPTOss(unittest.TestCase):
         obj = self._bare()
         self.assertFalse(obj.get_use_better_transformer())
 
+    def test_constructor_defaults_dtype_to_bfloat16(self):
+        import torch
+        from unittest.mock import patch
+        from ..airllm.airllm_base import AirLLMBaseModel
+        from ..airllm.airllm_gpt_oss import AirLLMGPTOss
+
+        with patch.object(AirLLMBaseModel, "__init__", return_value=None) as base_init:
+            AirLLMGPTOss("fake/model")
+
+        self.assertIn("dtype", base_init.call_args.kwargs)
+        self.assertEqual(base_init.call_args.kwargs["dtype"], torch.bfloat16)
+
+    def test_constructor_respects_explicit_dtype(self):
+        import torch
+        from unittest.mock import patch
+        from ..airllm.airllm_base import AirLLMBaseModel
+        from ..airllm.airllm_gpt_oss import AirLLMGPTOss
+
+        with patch.object(AirLLMBaseModel, "__init__", return_value=None) as base_init:
+            AirLLMGPTOss("fake/model", dtype=torch.float16)
+
+        self.assertEqual(base_init.call_args.kwargs["dtype"], torch.float16)
+
     def test_automodel_routes_gpt_oss_architecture(self):
         from unittest.mock import patch, MagicMock
         fake_config = MagicMock()
@@ -132,6 +155,27 @@ class TestAirLLMGPTOss(unittest.TestCase):
         got_cos, got_sin = result["position_embeddings"]
         self.assertEqual(got_cos.shape, (1, 4, 8))
         self.assertEqual(got_sin.shape, (1, 4, 8))
+
+    def test_move_layer_to_device_uses_hf_quantizer_when_no_bnb_metadata(self):
+        import torch
+        from unittest.mock import MagicMock, patch
+
+        obj = self._bare()
+        obj.model = MagicMock()
+        obj.hf_quantizer = MagicMock()
+        obj.hf_quantizer.param_needs_quantization.return_value = True
+        obj._move_mxfp4_params_to_device = MagicMock(return_value=(set(), set()))
+
+        state_dict = {
+            "model.layers.0.self_attn.q_proj.weight": torch.zeros(2, 2),
+        }
+
+        with patch("airllm.airllm_base.set_module_tensor_to_device") as mocked_set_tensor:
+            layers = obj.move_layer_to_device(state_dict)
+
+        obj.hf_quantizer.create_quantized_param.assert_called_once()
+        mocked_set_tensor.assert_not_called()
+        self.assertEqual(layers, ["model.layers.0.self_attn.q_proj.weight"])
 
 
 class TestAirLLMMinimax(unittest.TestCase):
