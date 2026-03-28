@@ -70,12 +70,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> AsyncGenerator[bytes, None]:
         """Yield per-token SSE chunks from a TextIteratorStreamer in real time."""
         loop = asyncio.get_event_loop()
+
+        def _next_or_none(it: Any) -> str | None:
+            try:
+                return next(it)
+            except StopIteration:
+                return None
+
         try:
             # Drain the streamer in a thread-pool so we don't block the event loop.
             while True:
-                try:
-                    token: str = await loop.run_in_executor(None, next, streamer)
-                except StopIteration:
+                token = await loop.run_in_executor(None, _next_or_none, streamer)
+                if token is None:
                     break
                 chunk = {
                     "id": meta["id"],
@@ -92,7 +98,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 }
                 yield f"data: {json.dumps(chunk)}\n\n".encode("utf-8")
         finally:
-            thread.join()
+            await loop.run_in_executor(None, thread.join)
         # Closing chunk
         done_chunk = {
             "id": meta["id"],

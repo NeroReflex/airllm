@@ -185,3 +185,44 @@ class TestChatCompletionsToolSupport(unittest.TestCase):
         self.assertEqual(payload["choices"][0]["finish_reason"], "stop")
         self.assertEqual(payload["choices"][0]["message"]["content"], "hello")
         self.assertIsNone(payload["choices"][0]["message"].get("tool_calls"))
+
+    def test_streaming_path_emits_incremental_sse_chunks(self):
+        class _FakeStreamer:
+            def __init__(self, chunks):
+                self._chunks = iter(chunks)
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                return next(self._chunks)
+
+        class _FakeThread:
+            def join(self):
+                return None
+
+        self.runner.generate_chat_streaming.return_value = (
+            {
+                "id": "chatcmpl-stream",
+                "created": 123,
+                "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+            },
+            _FakeStreamer(["Hel", "lo", "!"]),
+            _FakeThread(),
+        )
+
+        response = self.client.post(
+            "/v1/chat/completions",
+            json={
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": True,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        lines = [line for line in response.text.splitlines() if line.startswith("data: ")]
+        payloads = [json.loads(line.replace("data: ", "", 1)) for line in lines if line != "data: [DONE]"]
+
+        self.assertGreaterEqual(len(payloads), 3)
+        deltas = [p["choices"][0]["delta"]["content"] for p in payloads[:-1]]
+        self.assertEqual("".join(deltas), "Hello!")

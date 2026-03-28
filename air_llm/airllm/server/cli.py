@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import sys
+from typing import Any
 import uvicorn
 
 from .config import Settings
@@ -341,16 +342,31 @@ def _cmd_run(args: argparse.Namespace) -> int:  # noqa: C901
             conversation.append({"role": "system", "content": system_prompt})
             print(f"{role_label('system', use_color)}{system_prompt}")
 
-    while True:
-        try:
-            user_input = input(user_input_prompt(use_color)).strip()
-            if use_color:
-                sys.stdout.write(_ANSI_RESET)
-                sys.stdout.flush()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            break
+    def _iter_user_inputs() -> Any:
+        """Yield user messages from TTY input() or line-based stdin pipes."""
+        if sys.stdin.isatty():
+            while True:
+                try:
+                    user_input = input(user_input_prompt(use_color)).strip()
+                    if use_color:
+                        sys.stdout.write(_ANSI_RESET)
+                        sys.stdout.flush()
+                except (EOFError, KeyboardInterrupt):
+                    print()
+                    return
+                yield user_input
+            return
 
+        # Non-interactive mode: consume stdin line-by-line so pipes work
+        # predictably (`printf ... | airllm run ...`) without re-typing.
+        for raw_line in sys.stdin:
+            user_input = raw_line.rstrip("\r\n").strip()
+            if not user_input:
+                continue
+            print(f"{role_label('user', use_color)}{user_input}")
+            yield user_input
+
+    for user_input in _iter_user_inputs():
         if not user_input:
             continue
         if user_input.lower() in ("/bye", "/exit", "/quit"):

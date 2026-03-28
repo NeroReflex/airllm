@@ -1,7 +1,6 @@
 """AirLLM support for GPT-OSS models (for example `unsloth/gpt-oss-20b`)."""
 
 import torch
-from transformers import GenerationConfig
 
 from .airllm_base import AirLLMBaseModel
 
@@ -38,7 +37,7 @@ class AirLLMGPTOss(AirLLMBaseModel):
         pass
 
     def get_generation_config(self):
-        return GenerationConfig()
+        return super().get_generation_config()
 
     def init_model(self):
         # Reuse base init pipeline; just force eager attention for GPT-OSS.

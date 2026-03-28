@@ -1,4 +1,7 @@
-from .cli import main
+def main(argv=None):
+	from .cli import main as _main
+
+	return _main(argv)
 
 
 def create_app(*args, **kwargs):

@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from ..airllm.server.config import Settings
-from ..airllm.server.runner import ServerRunner
+from ..airllm.server.runner import ServerRunner, _HarmonyFinalChannelStreamer
 
 
 def _runner(max_seq_len=None, hf_token=""):
@@ -314,6 +314,35 @@ class TestApplyChatTemplate(unittest.TestCase):
         with self.assertRaises(ValueError, msg="Should raise ValueError for missing file"):
             runner._apply_chat_template(MESSAGES)
 
+    def test_harmony_plain_chat_forces_final_channel_prompt(self):
+        tok = MagicMock()
+        tok.apply_chat_template.return_value = (
+            "<|start|>system<|message|>sys<|end|>"
+            "<|start|>user<|message|>hi<|end|><|start|>assistant"
+        )
+        tok.chat_template = "<|channel|>"
+        runner = _runner_with_tokenizer(tokenizer=tok)
+        runner.loaded_model_id = "unsloth/gpt-oss-20b"
+
+        prompt, used = runner._apply_chat_template(MESSAGES)
+
+        self.assertTrue(used)
+        self.assertTrue(prompt.endswith("<|start|>assistant<|channel|>final<|message|>"))
+
+    def test_harmony_with_tools_does_not_force_final_channel_prompt(self):
+        tok = MagicMock()
+        tok.apply_chat_template.return_value = "<|start|>assistant"
+        tok.chat_template = "<|channel|>"
+        runner = _runner_with_tokenizer(tokenizer=tok)
+        runner.loaded_model_id = "unsloth/gpt-oss-20b"
+
+        prompt, _ = runner._apply_chat_template(
+            MESSAGES,
+            tools=[{"type": "function", "function": {"name": "tool_a"}}],
+        )
+
+        self.assertEqual(prompt, "<|start|>assistant")
+
     # ------------------------------------------------------------------
     # _flatten_messages_to_prompt integration
     # ------------------------------------------------------------------
@@ -347,6 +376,29 @@ class TestApplyChatTemplate(unittest.TestCase):
         self.assertFalse(used)
         self.assertEqual(images, [])
         self.assertIn("Describe this:", prompt)
+
+    def test_flatten_forces_harmony_final_channel_for_plain_chat(self):
+        tok = MagicMock()
+        tok.chat_template = "<|start|>assistant<|channel|>"
+        tok.apply_chat_template.return_value = "...<|start|>assistant"
+        runner = _runner_with_tokenizer(tokenizer=tok)
+        runner.loaded_model_id = "unsloth/gpt-oss-20b"
+
+        prompt, _, used = runner._flatten_messages_to_prompt(MESSAGES)
+
+        self.assertTrue(used)
+        self.assertTrue(prompt.endswith("<|channel|>final<|message|>"))
+
+    def test_flatten_does_not_double_append_harmony_final_channel(self):
+        tok = MagicMock()
+        tok.chat_template = "<|channel|>"
+        tok.apply_chat_template.return_value = "...<|start|>assistant"
+        runner = _runner_with_tokenizer(tokenizer=tok)
+        runner.loaded_model_id = "unsloth/gpt-oss-20b"
+
+        prompt, _, _ = runner._flatten_messages_to_prompt(MESSAGES)
+
+        self.assertEqual(prompt.count("<|channel|>final<|message|>"), 1)
 
 
 class TestNaiveFormat(unittest.TestCase):
@@ -498,3 +550,235 @@ class TestGenerateChatStructuredOutput(unittest.TestCase):
         self.assertEqual(response["reasoning_content"], "reason privately")
         self.assertEqual(response["finish_reason"], "tool_calls")
         self.assertEqual(response["tool_calls"][0]["function"]["name"], "search")
+
+
+class TestGenerateChatStreaming(unittest.TestCase):
+    def test_streamer_is_configured_to_skip_prompt(self):
+        tok = MagicMock()
+        ids = MagicMock()
+        ids.to.return_value = ids
+        ids.shape = (1, 5)
+        attn = MagicMock()
+        attn.to.return_value = attn
+        tok.return_value = {
+            "input_ids": ids,
+            "attention_mask": attn,
+        }
+
+        runner = _runner_with_tokenizer(tokenizer=tok)
+        runner.load_model_if_needed = MagicMock(side_effect=lambda model_id=None: None)
+        runner._flatten_messages_to_prompt = MagicMock(return_value=("prompt", [], True))
+        runner.settings.device = "cpu"
+
+        with patch("transformers.TextIteratorStreamer") as mock_streamer:
+            mock_streamer.return_value = MagicMock()
+            _, _, thread = runner.generate_chat_streaming(
+                messages=[{"role": "user", "content": "hi"}],
+                model_id="stub-model",
+                max_tokens=8,
+                temperature=0.0,
+                top_p=1.0,
+            )
+
+        thread.join(timeout=1.0)
+
+        mock_streamer.assert_called_once_with(
+            tok,
+            skip_special_tokens=True,
+            skip_prompt=True,
+            timeout=None,
+        )
+
+    def test_generate_chat_streaming_uses_harmony_streamer_for_plain_gpt_oss_chat(self):
+        import torch
+        from openai_harmony import HarmonyEncodingName, load_harmony_encoding
+
+        tok = MagicMock()
+        input_ids = torch.tensor([[1, 2, 3]])
+        attention_mask = torch.ones_like(input_ids)
+        tok.return_value = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+        }
+
+        runner = _runner_with_tokenizer(tokenizer=tok)
+        runner.loaded_model_id = "unsloth/gpt-oss-20b"
+        runner.load_model_if_needed = MagicMock(side_effect=lambda model_id=None: None)
+        runner._flatten_messages_to_prompt = MagicMock(return_value=("prompt", [], True))
+        runner.settings.device = "cpu"
+        encoding = load_harmony_encoding(HarmonyEncodingName.HARMONY_GPT_OSS)
+
+        with patch.object(runner, "_get_harmony_encoding", return_value=encoding):
+            _, streamer, thread = runner.generate_chat_streaming(
+                messages=[{"role": "user", "content": "hi"}],
+                model_id="unsloth/gpt-oss-20b",
+                max_tokens=8,
+                temperature=0.0,
+                top_p=1.0,
+            )
+
+        thread.join(timeout=1.0)
+        self.assertIsInstance(streamer, _HarmonyFinalChannelStreamer)
+
+    def test_generate_chat_streaming_uses_harmony_streamer_for_tool_turns(self):
+        import torch
+        from openai_harmony import HarmonyEncodingName, load_harmony_encoding
+
+        tok = MagicMock()
+        input_ids = torch.tensor([[1, 2, 3]])
+        attention_mask = torch.ones_like(input_ids)
+        tok.return_value = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+        }
+
+        runner = _runner_with_tokenizer(tokenizer=tok)
+        runner.loaded_model_id = "unsloth/gpt-oss-20b"
+        runner.load_model_if_needed = MagicMock(side_effect=lambda model_id=None: None)
+        runner._flatten_messages_to_prompt = MagicMock(return_value=("prompt", [], True))
+        runner.settings.device = "cpu"
+        encoding = load_harmony_encoding(HarmonyEncodingName.HARMONY_GPT_OSS)
+
+        with patch.object(runner, "_get_harmony_encoding", return_value=encoding):
+            _, streamer, thread = runner.generate_chat_streaming(
+                messages=[{"role": "user", "content": "hi"}],
+                model_id="unsloth/gpt-oss-20b",
+                max_tokens=8,
+                temperature=0.0,
+                top_p=1.0,
+                tools=[{"type": "function", "function": {"name": "echo"}}],
+            )
+
+        thread.join(timeout=1.0)
+        self.assertIsInstance(streamer, _HarmonyFinalChannelStreamer)
+
+
+class TestHarmonyCompletionParsing(unittest.TestCase):
+    def test_parse_harmony_completion_tokens_extracts_final_and_reasoning(self):
+        from openai_harmony import HarmonyEncodingName, load_harmony_encoding
+
+        runner = _runner_with_tokenizer()
+        encoding = load_harmony_encoding(HarmonyEncodingName.HARMONY_GPT_OSS)
+        completion_tokens = encoding.encode(
+            "<|start|>assistant<|channel|>analysis<|message|>think first<|end|>"
+            "<|start|>assistant<|channel|>final<|message|>hello there<|return|>",
+            allowed_special="all",
+        )
+
+        with patch.object(runner, "_get_harmony_encoding", return_value=encoding):
+            completion_text, reasoning_content, tool_calls, finish_reason = (
+                runner._parse_harmony_completion_tokens(completion_tokens)
+            )
+
+        self.assertEqual(completion_text, "hello there")
+        self.assertEqual(reasoning_content, "think first")
+        self.assertEqual(tool_calls, [])
+        self.assertEqual(finish_reason, "stop")
+
+    def test_parse_harmony_completion_tokens_falls_back_to_reasoning_when_no_final(self):
+        from openai_harmony import HarmonyEncodingName, load_harmony_encoding
+
+        runner = _runner_with_tokenizer()
+        encoding = load_harmony_encoding(HarmonyEncodingName.HARMONY_GPT_OSS)
+        completion_tokens = encoding.encode(
+            "<|start|>assistant<|channel|>analysis<|message|>draft reply<|return|>",
+            allowed_special="all",
+        )
+
+        with patch.object(runner, "_get_harmony_encoding", return_value=encoding):
+            completion_text, reasoning_content, tool_calls, finish_reason = (
+                runner._parse_harmony_completion_tokens(completion_tokens)
+            )
+
+        self.assertEqual(completion_text, "draft reply")
+        self.assertEqual(reasoning_content, "draft reply")
+        self.assertEqual(tool_calls, [])
+        self.assertEqual(finish_reason, "stop")
+
+    def test_harmony_streamer_emits_only_final_channel(self):
+        from openai_harmony import HarmonyEncodingName, load_harmony_encoding
+
+        encoding = load_harmony_encoding(HarmonyEncodingName.HARMONY_GPT_OSS)
+        completion_tokens = encoding.encode(
+            "<|start|>assistant<|channel|>analysis<|message|>private reasoning<|end|>"
+            "<|start|>assistant<|channel|>final<|message|>visible answer<|return|>",
+            allowed_special="all",
+        )
+        streamer = _HarmonyFinalChannelStreamer(
+            encoding,
+            prompt_token_count=2,
+            timeout=1.0,
+        )
+
+        streamer.put([123, 456] + completion_tokens[:5])
+        streamer.put(completion_tokens[5:])
+        streamer.end()
+
+        self.assertEqual("".join(list(streamer)), "visible answer")
+
+    def test_harmony_streamer_waits_without_timeout_error(self):
+        import threading
+        import time
+        from openai_harmony import HarmonyEncodingName, load_harmony_encoding
+
+        encoding = load_harmony_encoding(HarmonyEncodingName.HARMONY_GPT_OSS)
+        completion_tokens = encoding.encode(
+            "<|start|>assistant<|channel|>final<|message|>ok<|return|>",
+            allowed_special="all",
+        )
+        streamer = _HarmonyFinalChannelStreamer(
+            encoding,
+            prompt_token_count=0,
+            timeout=0.01,
+        )
+
+        def delayed_feed():
+            time.sleep(0.05)
+            streamer.put(completion_tokens)
+            streamer.end()
+
+        thread = threading.Thread(target=delayed_feed, daemon=True)
+        thread.start()
+        values = list(streamer)
+        thread.join(timeout=1.0)
+
+        self.assertEqual("".join(values), "ok")
+
+    def test_generate_chat_uses_harmony_parser_for_gpt_oss(self):
+        import torch
+        from openai_harmony import HarmonyEncodingName, load_harmony_encoding
+
+        tok = MagicMock()
+        input_ids = torch.tensor([[11, 22]])
+        attention_mask = torch.ones_like(input_ids)
+        tok.return_value = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+        }
+
+        runner = _runner_with_tokenizer(tokenizer=tok)
+        runner.settings.device = "cpu"
+        runner.loaded_model_id = "unsloth/gpt-oss-20b"
+        runner.load_model_if_needed = MagicMock(side_effect=lambda model_id=None: None)
+        runner._flatten_messages_to_prompt = MagicMock(return_value=("prompt", [], True))
+
+        encoding = load_harmony_encoding(HarmonyEncodingName.HARMONY_GPT_OSS)
+        completion_tokens = encoding.encode(
+            "<|start|>assistant<|channel|>analysis<|message|>plan<|end|>"
+            "<|start|>assistant<|channel|>final<|message|>done<|return|>",
+            allowed_special="all",
+        )
+        runner.model.generate.return_value = torch.tensor([[11, 22] + completion_tokens])
+
+        with patch.object(runner, "_get_harmony_encoding", return_value=encoding):
+            response = runner.generate_chat(
+                messages=[{"role": "user", "content": "hi"}],
+                model_id="unsloth/gpt-oss-20b",
+                max_tokens=32,
+                temperature=0.0,
+                top_p=1.0,
+            )
+
+        tok.decode.assert_called_once()
+        self.assertEqual(response["completion_text"], "done")
+        self.assertEqual(response["reasoning_content"], "plan")

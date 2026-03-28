@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import queue
 import re
 import threading
 import time
@@ -16,8 +17,86 @@ from airllm import AutoModel
 
 from .config import Settings
 
+try:
+    from openai_harmony import (
+        HarmonyEncodingName,
+        Role as HarmonyRole,
+        StreamableParser,
+        load_harmony_encoding,
+    )
+except ImportError:
+    HarmonyEncodingName = None
+    HarmonyRole = None
+    StreamableParser = None
+    load_harmony_encoding = None
+
 
 _QUIET_SENTINEL = object()
+
+
+class _HarmonyFinalChannelStreamer:
+    """Queue-backed streamer that exposes only GPT-OSS final-channel deltas."""
+
+    def __init__(self, encoding: Any, prompt_token_count: int, timeout: float = 120.0):
+        if StreamableParser is None or HarmonyRole is None:
+            raise RuntimeError("openai-harmony streaming support is unavailable")
+        self._parser = StreamableParser(encoding, HarmonyRole.ASSISTANT)
+        self._prompt_tokens_to_skip = max(0, int(prompt_token_count))
+        self._timeout = timeout
+        self._queue: queue.Queue[Any] = queue.Queue()
+        self._stop_signal = object()
+
+    def put(self, value: Any) -> None:
+        tokens = self._normalize_tokens(value)
+        if self._prompt_tokens_to_skip:
+            if len(tokens) <= self._prompt_tokens_to_skip:
+                self._prompt_tokens_to_skip -= len(tokens)
+                return
+            tokens = tokens[self._prompt_tokens_to_skip :]
+            self._prompt_tokens_to_skip = 0
+
+        for token in tokens:
+            try:
+                self._parser.process(int(token))
+            except Exception:
+                continue
+            delta = self._parser.last_content_delta
+            if delta and self._parser.current_channel == "final":
+                self._queue.put(delta)
+
+    def end(self) -> None:
+        try:
+            self._parser.process_eos()
+        except Exception:
+            pass
+        self._queue.put(self._stop_signal)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self) -> str:
+        while True:
+            try:
+                value = self._queue.get(timeout=self._timeout)
+            except queue.Empty:
+                # Harmony streams can have long silences while still generating.
+                # Keep waiting until we receive text or an explicit stop signal.
+                continue
+            if value is self._stop_signal:
+                raise StopIteration
+            return value
+
+    @staticmethod
+    def _normalize_tokens(value: Any) -> list[int]:
+        if hasattr(value, "tolist"):
+            value = value.tolist()
+        if isinstance(value, tuple):
+            value = list(value)
+        if isinstance(value, list):
+            if value and isinstance(value[0], list):
+                value = value[0]
+            return [int(token) for token in value]
+        return [int(value)]
 
 
 class ServerRunner:
@@ -151,6 +230,123 @@ class ServerRunner:
         ]
         print("\n".join(summary), flush=True)
 
+    def _uses_harmony_format(self) -> bool:
+        model_id = (self.loaded_model_id or "").lower()
+        if "gpt-oss" in model_id:
+            return True
+
+        template = getattr(self.tokenizer, "chat_template", None)
+        if not isinstance(template, str):
+            return False
+        return "<|channel|>" in template and "<|start|>assistant" in template
+
+    def _get_harmony_encoding(self) -> Any | None:
+        if not self._uses_harmony_format() or load_harmony_encoding is None:
+            return None
+        encoding = getattr(self, "_harmony_encoding", None)
+        if encoding is None:
+            encoding = load_harmony_encoding(HarmonyEncodingName.HARMONY_GPT_OSS)
+            self._harmony_encoding = encoding
+        return encoding
+
+    def _harmony_content_to_text(self, content: Any) -> str:
+        if isinstance(content, str):
+            return content
+        if not isinstance(content, list):
+            return ""
+
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, dict):
+                if part.get("type") == "text":
+                    parts.append(part.get("text", ""))
+                elif "text" in part:
+                    parts.append(str(part["text"]))
+                elif "content" in part:
+                    parts.append(str(part["content"]))
+            else:
+                text = getattr(part, "text", None)
+                if text is not None:
+                    parts.append(text)
+        return "".join(parts)
+
+    def _parse_harmony_completion_tokens(
+        self,
+        completion_ids: Any,
+    ) -> tuple[str, str | None, list[dict[str, Any]], str] | None:
+        encoding = self._get_harmony_encoding()
+        if encoding is None or HarmonyRole is None:
+            return None
+
+        if hasattr(completion_ids, "tolist"):
+            completion_ids = completion_ids.tolist()
+        token_list = [int(token) for token in completion_ids]
+        if not token_list:
+            return "", None, [], "stop"
+
+        try:
+            messages = encoding.parse_messages_from_completion_tokens(
+                token_list,
+                role=HarmonyRole.ASSISTANT,
+                strict=False,
+            )
+        except Exception:
+            return None
+
+        reasoning_chunks: list[str] = []
+        final_chunks: list[str] = []
+        fallback_chunks: list[str] = []
+        tool_calls: list[dict[str, Any]] = []
+
+        for message in messages:
+            data = message.to_dict() if hasattr(message, "to_dict") else message
+            if not isinstance(data, dict):
+                continue
+
+            role = data.get("role")
+            role_name = getattr(role, "value", role)
+            if role_name != "assistant":
+                continue
+
+            channel = data.get("channel")
+            recipient = data.get("recipient")
+            text = self._harmony_content_to_text(data.get("content"))
+
+            if isinstance(recipient, str) and recipient.startswith("functions."):
+                function_name = recipient.split(".", 1)[1]
+                arguments = text.strip() or "{}"
+                try:
+                    arguments = json.dumps(json.loads(arguments), ensure_ascii=False)
+                except Exception:
+                    arguments = json.dumps(arguments, ensure_ascii=False)
+                tool_calls.append(
+                    {
+                        "id": f"call_{uuid.uuid4().hex[:24]}",
+                        "type": "function",
+                        "function": {
+                            "name": function_name,
+                            "arguments": arguments,
+                        },
+                    }
+                )
+                continue
+
+            if channel == "analysis":
+                if text:
+                    reasoning_chunks.append(text)
+            elif channel == "final":
+                if text:
+                    final_chunks.append(text)
+            elif text:
+                fallback_chunks.append(text)
+
+        completion_text = "\n\n".join(final_chunks or fallback_chunks).strip()
+        if not completion_text and reasoning_chunks and not tool_calls:
+            completion_text = "\n\n".join(reasoning_chunks).strip()
+        reasoning_content = "\n\n".join(reasoning_chunks).strip() or None
+        finish_reason = "tool_calls" if tool_calls else "stop"
+        return completion_text, reasoning_content, tool_calls, finish_reason
+
     # ------------------------------------------------------------------
     # Prompt formatting
     # ------------------------------------------------------------------
@@ -198,6 +394,7 @@ class ServerRunner:
             tools=tools,
             tool_choice=tool_choice,
         )
+
         return prompt, images, used_template
 
     def _apply_chat_template(
@@ -253,6 +450,15 @@ class ServerRunner:
             if tool_choice is not None:
                 kwargs["tool_choice"] = tool_choice
             prompt: str = tokenizer.apply_chat_template(messages, **kwargs)
+            # For plain chat on harmony models, force final-channel generation
+            # so user-facing interactive mode does not stall on long analysis.
+            if (
+                self._uses_harmony_format()
+                and not tools
+                and tool_choice is None
+                and prompt.rstrip().endswith("<|start|>assistant")
+            ):
+                prompt = f"{prompt.rstrip()}<|channel|>final<|message|>"
             return prompt, True
         except Exception:
             # Tokenizer has no chat_template, jinja2 is unavailable, or the
@@ -445,15 +651,25 @@ class ServerRunner:
             finally:
                 self._restore_quiet_generation(previous_quiet, suppress_output)
             completion_ids = output_ids[0][input_ids.shape[-1] :]
-            completion = self.tokenizer.decode(
-                completion_ids, skip_special_tokens=True
-            ).strip()
             prompt_tokens = int(input_ids.shape[-1])
             completion_tokens = int(completion_ids.shape[-1])
 
-        clean_text, tool_calls = self._extract_tool_calls_from_completion(completion)
-        clean_text, reasoning_content = self._extract_reasoning_from_completion(clean_text)
-        finish_reason = "tool_calls" if tool_calls else "stop"
+        completion = self.tokenizer.decode(
+            completion_ids, skip_special_tokens=True
+        ).strip()
+
+        harmony_parsed = self._parse_harmony_completion_tokens(completion_ids)
+        if harmony_parsed is not None:
+            clean_text, reasoning_content, tool_calls, finish_reason = harmony_parsed
+            # When the prompt already forced `<|channel|>final<|message|>`,
+            # completion tokens may be raw content without harmony headers.
+            # Keep decoded text instead of returning an empty assistant turn.
+            if not clean_text and completion:
+                clean_text = completion
+        else:
+            clean_text, tool_calls = self._extract_tool_calls_from_completion(completion)
+            clean_text, reasoning_content = self._extract_reasoning_from_completion(clean_text)
+            finish_reason = "tool_calls" if tool_calls else "stop"
 
         return {
             "id": f"chatcmpl-{uuid.uuid4().hex}",
@@ -511,11 +727,21 @@ class ServerRunner:
         )
         prompt_tokens = int(input_ids.shape[-1])
 
-        streamer = TextIteratorStreamer(
-            self.tokenizer,
-            skip_special_tokens=True,
-            timeout=120.0,
-        )
+        harmony_encoding = self._get_harmony_encoding()
+        use_harmony_streamer = harmony_encoding is not None
+        if use_harmony_streamer:
+            streamer = _HarmonyFinalChannelStreamer(
+                harmony_encoding,
+                prompt_token_count=prompt_tokens,
+                timeout=120.0,
+            )
+        else:
+            streamer = TextIteratorStreamer(
+                self.tokenizer,
+                skip_special_tokens=True,
+                skip_prompt=True,
+                timeout=None,
+            )
 
         gen_kwargs: dict[str, Any] = {
             "input_ids": input_ids,

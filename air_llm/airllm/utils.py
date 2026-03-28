@@ -28,12 +28,24 @@ from .persist import ModelPersister
 from .device_utils import empty_cache, supports_bitsandbytes
 
 
-try:
-    import bitsandbytes as bnb
+bnb = None
+bitsandbytes_installed = False
 
+
+def _load_bitsandbytes_if_available():
+    """Load bitsandbytes only when compression paths are exercised."""
+    global bnb, bitsandbytes_installed
+    if bitsandbytes_installed and bnb is not None:
+        return True
+
+    try:
+        import bitsandbytes as loaded_bnb
+    except Exception:
+        return False
+
+    bnb = loaded_bnb
     bitsandbytes_installed = True
-except ImportError:
-    bitsandbytes_installed = False
+    return True
 
 
 import huggingface_hub
@@ -94,6 +106,13 @@ def uncompress_layer_state_dict(layer_state_dict, device: str = "cuda"):
     when at least one CUDA device is present (even if the inference device is
     DirectML/MPS/CPU).
     """
+    if any('4bit' in k or '8bit' in k for k in layer_state_dict.keys()):
+        if not _load_bitsandbytes_if_available():
+            raise ImportError(
+                "bitsandbytes is required to load compressed layer shards. "
+                "Install it with: pip install bitsandbytes"
+            )
+
     uncompressed_layer_state_dict = None
     if any(['4bit' in k for k in layer_state_dict.keys()]):
         uncompressed_layer_state_dict = {}
@@ -171,6 +190,13 @@ def compress_layer_state_dict(layer_state_dict, compression=None):
     because bitsandbytes only supports NVIDIA GPUs.  The compressed tensors
     are stored on CPU / disk and later dequantized at load time.
     """
+    if compression in ('4bit', '8bit'):
+        if not _load_bitsandbytes_if_available():
+            raise ImportError(
+                "bitsandbytes is required for compression. "
+                "Install it with: pip install bitsandbytes"
+            )
+
     compressed_layer_state_dict = None
     if compression == '4bit':
         compressed_layer_state_dict = {}
@@ -208,7 +234,9 @@ def split_and_save_layers(checkpoint_path, layer_shards_saving_path=None, splitt
     """
 
     if compression is not None:
-        assert bitsandbytes_installed, f"when using compression bitsandbytes has to be installed."
+        assert _load_bitsandbytes_if_available(), (
+            "when using compression bitsandbytes has to be installed."
+        )
         splitted_model_dir_name = splitted_model_dir_name + "." + compression
 
     checkpoint_path = Path(checkpoint_path)

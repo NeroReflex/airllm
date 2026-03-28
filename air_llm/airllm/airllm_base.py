@@ -28,13 +28,24 @@ from .device_utils import (is_cuda_device, is_directml_available,
                             can_pin_memory, supports_bitsandbytes,
                             get_device_type)
 
-try:
-    import bitsandbytes as bnb
+bnb = None
+bitsandbytes_installed = False
 
+
+def _load_bitsandbytes_if_available():
+    """Load bitsandbytes lazily so non-compression runs avoid CUDA loader side effects."""
+    global bnb, bitsandbytes_installed
+    if bitsandbytes_installed and bnb is not None:
+        return True
+
+    try:
+        import bitsandbytes as loaded_bnb
+    except Exception:
+        return False
+
+    bnb = loaded_bnb
     bitsandbytes_installed = True
-    print('>>>> bitsandbytes installed')
-except ImportError:
-    bitsandbytes_installed = False
+    return True
 
 
 
@@ -213,7 +224,7 @@ class AirLLMBaseModel(GenerationMixin):
         self._cached_pos_emb_pos_numel = None
 
         if compression is not None:
-            if not bitsandbytes_installed:
+            if not _load_bitsandbytes_if_available():
                 raise ImportError('WARNING: bitsandbytes not found. Compression needs bitsandbytes. To use compression, please install bitsandbytes: `pip install bitsandbytes`')
             if not supports_bitsandbytes(device):
                 raise ValueError(
@@ -603,6 +614,12 @@ class AirLLMBaseModel(GenerationMixin):
             return handled_keys, handled_params
         except ImportError:
             pass
+        except Exception:
+            # transformers 4.57.x exposes Mxfp4Deserialize but can still fail
+            # at runtime because triton_kernels_hub was never initialized.
+            # Fall back to the legacy quantizer path below instead of aborting
+            # GPT-OSS layer loading.
+            pass
 
         # ── transformers 4.57.x path ──────────────────────────────────────────
         # Use create_quantized_param, which calls dequantize() internally and
@@ -681,6 +698,11 @@ class AirLLMBaseModel(GenerationMixin):
                 quant_state_dict = {k[len(param_name) + 1:]: v for k, v in state_dict.items()
                                     if k.startswith(param_name + ".") and k != param_name}
                 if quant_state_dict:
+                    if not _load_bitsandbytes_if_available():
+                        raise ImportError(
+                            "bitsandbytes is required to load quantized parameters for this model. "
+                            "Install it with: pip install bitsandbytes"
+                        )
                     quant_state = bnb.functional.QuantState.from_dict(
                         qs_dict=quant_state_dict,
                         device=self.running_device,

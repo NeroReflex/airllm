@@ -41,11 +41,20 @@ build:
 	  --onefile \
 	  --assume-yes-for-downloads \
 	  --module-parameter=torch-disable-jit=no \
+	  --include-distribution-metadata=huggingface_hub \
+	  --include-distribution-metadata=hf-xet \
 	  --include-distribution-metadata=pytest \
+	  --include-distribution-metadata=httpx \
 	  --include-distribution-metadata=kernels \
 	  --include-distribution-metadata=triton \
 	  --include-package=airllm \
+	  --include-package=hf_xet \
 	  --include-package=kernels \
+	  --include-package=httpx \
+	  --include-package=triton \
+	  --include-package=triton.backends \
+	  --include-package=triton.backends.amd \
+	  --include-package=triton.backends.nvidia \
 	  --include-package=_pytest \
 	  --include-package-data=kernels \
 	  --output-dir="$(OUT_DIR)" \

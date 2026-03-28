@@ -111,6 +111,16 @@ class TestAirLLMGPTOss(unittest.TestCase):
 
         self.assertEqual(base_init.call_args.kwargs["dtype"], torch.float16)
 
+    def test_generation_config_delegates_to_base_loader(self):
+        from unittest.mock import patch
+        from ..airllm.airllm_base import AirLLMBaseModel
+
+        obj = self._bare()
+        sentinel = object()
+
+        with patch.object(AirLLMBaseModel, "get_generation_config", return_value=sentinel):
+            self.assertIs(obj.get_generation_config(), sentinel)
+
     def test_automodel_routes_gpt_oss_architecture(self):
         from unittest.mock import patch, MagicMock
         fake_config = MagicMock()
@@ -176,6 +186,45 @@ class TestAirLLMGPTOss(unittest.TestCase):
         obj.hf_quantizer.create_quantized_param.assert_called_once()
         mocked_set_tensor.assert_not_called()
         self.assertEqual(layers, ["model.layers.0.self_attn.q_proj.weight"])
+
+    def test_move_mxfp4_params_falls_back_when_deserializer_crashes(self):
+        import torch
+        from unittest.mock import MagicMock, patch
+
+        class FakeMxfp4Quantizer:
+            pass
+
+        obj = self._bare()
+        obj.model = MagicMock()
+        obj.hf_quantizer = FakeMxfp4Quantizer()
+        obj.hf_quantizer.param_needs_quantization = MagicMock(return_value=True)
+        obj.hf_quantizer.create_quantized_param = MagicMock()
+
+        state_dict = {
+            "model.layers.0.mlp.experts.gate_up_proj_blocks": torch.zeros(1, 1),
+            "model.layers.0.mlp.experts.gate_up_proj_scales": torch.zeros(1, 1),
+        }
+
+        with patch(
+            "transformers.quantizers.quantizer_mxfp4.Mxfp4HfQuantizer",
+            FakeMxfp4Quantizer,
+        ), patch(
+            "transformers.integrations.mxfp4.Mxfp4Deserialize"
+        ) as mock_deserializer:
+            mock_deserializer.return_value.convert.side_effect = NameError(
+                "triton_kernels_hub"
+            )
+            handled_keys, handled_params = obj._move_mxfp4_params_to_device(state_dict)
+
+        self.assertEqual(
+            handled_keys,
+            {
+                "model.layers.0.mlp.experts.gate_up_proj_blocks",
+                "model.layers.0.mlp.experts.gate_up_proj_scales",
+            },
+        )
+        self.assertEqual(handled_params, {"model.layers.0.mlp.experts.gate_up_proj"})
+        self.assertEqual(obj.hf_quantizer.create_quantized_param.call_count, 2)
 
 
 class TestAirLLMMinimax(unittest.TestCase):
